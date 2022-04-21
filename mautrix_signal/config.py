@@ -104,6 +104,7 @@ class Config(BaseBridgeConfig):
 
         copy("bridge.relay.enabled")
         copy_dict("bridge.relay.message_formats")
+        copy("bridge.bridge_matrix_leave")
 
         copy("bridge.limits.max_puppet_limit")
         copy("bridge.limits.min_puppet_activity_days")

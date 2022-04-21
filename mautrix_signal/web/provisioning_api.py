@@ -28,7 +28,7 @@ from mausignald.errors import (
     TimeoutException,
     UnregisteredUserError,
 )
-from mausignald.types import Account, Address, Profile
+from mausignald.types import Account, Address
 from mautrix.types import UserID
 from mautrix.util.logging import TraceLogger
 
@@ -81,6 +81,7 @@ class ProvisioningAPI:
 
         # Start new chat API
         self.app.router.add_get("/v2/contacts", self.list_contacts)
+        self.app.router.add_get("/v2/resolve_identifier/{number}", self.resolve_identifier)
         self.app.router.add_post("/v2/pm/{number}", self.start_pm)
 
     @property
@@ -122,8 +123,13 @@ class ProvisioningAPI:
                 text='{"error": "Missing user_id query param"}', headers=self._headers
             )
 
-        if not self.bridge.signal.is_connected:
-            await self.bridge.signal.wait_for_connected()
+        try:
+            if not self.bridge.signal.is_connected:
+                await self.bridge.signal.wait_for_connected(timeout=10)
+        except asyncio.TimeoutError:
+            raise web.HTTPServiceUnavailable(
+                text=json.dumps({"error": "Cannot connect to signald"}), headers=self._headers
+            )
 
         return await u.User.get_by_mxid(UserID(user_id))
 
@@ -377,9 +383,8 @@ class ProvisioningAPI:
             headers=self._acao_headers,
         )
 
-    async def start_pm(self, request: web.Request) -> web.Response:
-        user = await self.check_token_and_logged_in(request)
-        number = normalize_number(request.match_info["number"])
+    async def _resolve_identifier(self, number: str, user: u.User) -> pu.Puppet:
+        number = normalize_number(number)
 
         puppet: pu.Puppet = await pu.Puppet.get_by_address(Address(number=number))
         assert puppet, "Puppet.get_by_address with create=True can't return None"
@@ -395,6 +400,11 @@ class ProvisioningAPI:
                 self.log.exception(f"Unknown error fetching UUID for {puppet.number}")
                 error = {"error": "Unknown error while fetching UUID"}
                 raise web.HTTPInternalServerError(text=json.dumps(error), headers=self._headers)
+        return puppet
+
+    async def start_pm(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        puppet = await self._resolve_identifier(request.match_info["number"], user)
 
         portal = await po.Portal.get_by_chat_id(
             puppet.address, receiver=user.username, create=True
@@ -412,9 +422,33 @@ class ProvisioningAPI:
                 "room_id": portal.mxid,
                 "just_created": just_created,
                 "chat_id": portal.chat_id.serialize(),
+                "other_user": {
+                    "mxid": puppet.mxid,
+                    "displayname": puppet.name,
+                    "avatar_url": puppet.avatar_url,
+                },
             },
             headers=self._acao_headers,
             status=201 if just_created else 200,
+        )
+
+    async def resolve_identifier(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        puppet = await self._resolve_identifier(request.match_info["number"], user)
+        portal = await po.Portal.get_by_chat_id(
+            puppet.address, receiver=user.username, create=False
+        )
+        return web.json_response(
+            {
+                "room_id": portal.mxid if portal else None,
+                "chat_id": puppet.address.serialize(),
+                "other_user": {
+                    "mxid": puppet.mxid,
+                    "displayname": puppet.name,
+                    "avatar_url": puppet.avatar_url,
+                },
+            },
+            headers=self._acao_headers,
         )
 
     # endregion
