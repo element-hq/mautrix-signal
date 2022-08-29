@@ -494,9 +494,9 @@ class Portal(DBPortal, BasePortal):
                 # exceptions actually continue to error.
                 sleep_seconds = (retry_num + 1) ** 2
                 msg = (
-                    f"Not connected to signald. Going to sleep for {sleep_seconds}s. Error: {e}"
+                    f"Not connected to signald. Going to sleep for {sleep_seconds} seconds. Error: {e}"
                     if isinstance(e, NotConnected)
-                    else f"UnknownReactionTarget: Going to sleep for {sleep_seconds}s. Error: {e}"
+                    else f"UnknownReactionTarget: Going to sleep for {sleep_seconds} seconds. Error: {e}"
                 )
                 self.log.exception(msg)
                 sender.send_remote_checkpoint(
@@ -518,7 +518,7 @@ class Portal(DBPortal, BasePortal):
                     )
                     event_content = TextMessageEventContent(
                         MessageType.NOTICE,
-                        f"{user_friendly_message} Waiting for {sleep_seconds} before retrying.",
+                        f"{user_friendly_message} Waiting for {sleep_seconds} seconds before retrying.",
                     )
                     if retry_message_event_id is not None:
                         event_content.set_edit(retry_message_event_id)
