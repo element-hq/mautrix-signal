@@ -15,4 +15,5 @@ from . import (
     # Since we merged the schema update `v08_user_activity`, all upgrades since `8` must be bumped by one version to avoid a clash. Please do this when merging.
     v09_disappearing_messages,
     v10_group_topic,
+    v11_puppet_name_quality,
 )

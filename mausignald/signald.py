@@ -22,6 +22,7 @@ from .types import (
     ErrorMessage,
     GetIdentitiesResponse,
     Group,
+    GroupAccessControl,
     GroupID,
     GroupV2,
     IncomingMessage,
@@ -34,6 +35,7 @@ from .types import (
     Quote,
     Reaction,
     SendMessageResponse,
+    StorageChange,
     TrustLevel,
     WebsocketConnectionState,
     WebsocketConnectionStateChangeEvent,
@@ -73,6 +75,7 @@ class SignaldClient(SignaldRPCClient):
         self.add_rpc_handler("ProtocolInvalidMessageError", self._parse_error)
         self.add_rpc_handler("WebSocketConnectionState", self._websocket_connection_state_change)
         self.add_rpc_handler("version", self._log_version)
+        self.add_rpc_handler("StorageChange", self._parse_storage_change)
         self.add_rpc_handler(CONNECT_EVENT, self._resubscribe)
         self.add_rpc_handler(DISCONNECT_EVENT, self._on_disconnect)
 
@@ -98,6 +101,11 @@ class SignaldClient(SignaldRPCClient):
         if not data.get("error"):
             return
         await self._run_event_handler(ErrorMessage.deserialize(data))
+
+    async def _parse_storage_change(self, data: dict[str, Any]) -> None:
+        if data["type"] != "StorageChange":
+            return
+        await self._run_event_handler(StorageChange.deserialize(data))
 
     async def _parse_message(self, data: dict[str, Any]) -> None:
         event_type = data["type"]
@@ -140,7 +148,7 @@ class SignaldClient(SignaldRPCClient):
     async def unsubscribe(self, username: str) -> bool:
         try:
             await self.request_v1("unsubscribe", account=username)
-            self._subscriptions.remove(username)
+            self._subscriptions.discard(username)
             SUBSCRIPTIONS_GAUGE.set(len(self._subscriptions))
             return True
         except RPCError as e:
@@ -353,11 +361,15 @@ class SignaldClient(SignaldRPCClient):
         resp = await self.request_v1("get_linked_devices", account=username)
         return [DeviceInfo.deserialize(dev) for dev in resp.get("devices", [])]
 
+    async def add_linked_device(self, username: str, uri: str) -> None:
+        await self.request_v1("add_device", account=username, uri=uri)
+
     async def remove_linked_device(self, username: str, device_id: int) -> None:
         await self.request_v1("remove_linked_device", account=username, deviceId=device_id)
 
-    async def list_contacts(self, username: str) -> list[Profile]:
-        resp = await self.request_v1("list_contacts", account=username)
+    async def list_contacts(self, username: str, use_cache: bool = False) -> list[Profile]:
+        kwargs = {"async": use_cache}
+        resp = await self.request_v1("list_contacts", account=username, **kwargs)
         return [Profile.deserialize(contact) for contact in resp["profiles"]]
 
     async def list_groups(self, username: str) -> list[Group | GroupV2]:
@@ -373,6 +385,28 @@ class SignaldClient(SignaldRPCClient):
     async def leave_group(self, username: str, group_id: GroupID) -> None:
         await self.request_v1("leave_group", account=username, groupID=group_id)
 
+    async def ban_user(
+        self, username: str, group_id: GroupID, users: list[Address]
+    ) -> Group | GroupV2:
+        serialized_users = [user.serialize() for user in (users or [])]
+        resp = await self.request_v1(
+            "ban_user", account=username, group_id=group_id, users=serialized_users
+        )
+        legacy = [Group.deserialize(group) for group in resp.get("legacyGroups", [])]
+        v2 = [GroupV2.deserialize(group) for group in resp.get("groups", [])]
+        return legacy + v2
+
+    async def unban_user(
+        self, username: str, group_id: GroupID, users: list[Address]
+    ) -> Group | GroupV2:
+        serialized_users = [user.serialize() for user in (users or [])]
+        resp = await self.request_v1(
+            "unban_user", account=username, group_id=group_id, users=serialized_users
+        )
+        legacy = [Group.deserialize(group) for group in resp.get("legacyGroups", [])]
+        v2 = [GroupV2.deserialize(group) for group in resp.get("groups", [])]
+        return legacy + v2
+
     async def update_group(
         self,
         username: str,
@@ -382,6 +416,8 @@ class SignaldClient(SignaldRPCClient):
         avatar_path: str | None = None,
         add_members: list[Address] | None = None,
         remove_members: list[Address] | None = None,
+        update_access_control: GroupAccessControl | None = None,
+        update_role: GroupMember | None = None,
     ) -> Group | GroupV2 | None:
         update_params = {
             key: value
@@ -394,6 +430,10 @@ class SignaldClient(SignaldRPCClient):
                 "removeMembers": (
                     [addr.serialize() for addr in remove_members] if remove_members else None
                 ),
+                "updateAccessControl": (
+                    update_access_control.serialize() if update_access_control else None
+                ),
+                "updateRole": (update_role.serialize() if update_role else None),
             }.items()
             if value is not None
         }
@@ -415,6 +455,26 @@ class SignaldClient(SignaldRPCClient):
         resp = await self.request_v1(
             "get_group", account=username, groupID=group_id, revision=revision
         )
+        if "id" not in resp:
+            return None
+        return GroupV2.deserialize(resp)
+
+    async def create_group(
+        self,
+        username: str,
+        avatar_path: str | None = None,
+        member_role_administrator: bool = False,
+        members: list[Address] | None = None,
+        title: str | None = None,
+    ) -> GroupV2 | None:
+        create_params = {
+            "avatar": avatar_path,
+            "member_role": "ADMINISTRATOR" if member_role_administrator else "DEFAULT",
+            "title": title,
+            "members": [addr.serialize() for addr in members],
+        }
+        create_params = {k: v for k, v in create_params.items() if v is not None}
+        resp = await self.request_v1("create_group", account=username, **create_params)
         if "id" not in resp:
             return None
         return GroupV2.deserialize(resp)

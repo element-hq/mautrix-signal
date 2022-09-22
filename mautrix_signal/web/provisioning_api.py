@@ -28,8 +28,8 @@ from mausignald.errors import (
     TimeoutException,
     UnregisteredUserError,
 )
-from mausignald.types import Account, Address
-from mautrix.types import UserID
+from mausignald.types import Account, Address, Profile
+from mautrix.types import JSON, UserID
 from mautrix.util.logging import TraceLogger
 
 from .. import portal as po, puppet as pu, user as u
@@ -201,14 +201,9 @@ class ProvisioningAPI:
                 f"Client cancelled link wait request ({session_id}) before it finished"
             )
             raise
-        except TimeoutException:
+        except (TimeoutException, ScanTimeoutError):
             raise web.HTTPBadRequest(
                 text='{"error": "Signal linking timed out"}', headers=self._headers
-            )
-        except ScanTimeoutError:
-            raise web.HTTPBadRequest(
-                text='{"error": "Signald websocket disconnected before linking finished"}',
-                headers=self._headers,
             )
         except InternalError:
             raise web.HTTPInternalServerError(
@@ -370,13 +365,23 @@ class ProvisioningAPI:
 
     async def list_contacts(self, request: web.Request) -> web.Response:
         user = await self.check_token_and_logged_in(request)
-        contacts = await self.bridge.signal.list_contacts(user.username)
+        contacts = await self.bridge.signal.list_contacts(user.username, use_cache=True)
+
+        async def transform(profile: Profile) -> JSON:
+            assert profile.address
+            puppet = await pu.Puppet.get_by_address(profile.address, False)
+            avatar_url = puppet.avatar_url if puppet else None
+            return {
+                "name": profile.name,
+                "contact_name": profile.contact_name,
+                "profile_name": profile.profile_name,
+                "avatar_url": avatar_url,
+                "address": profile.address.serialize(),
+            }
+
         return web.json_response(
             {
-                c.address.number: {
-                    "name": c.name,
-                    "address": c.address.serialize(),
-                }
+                c.address.number: await transform(c)
                 for c in contacts
                 if c.address and c.address.number
             },
@@ -384,7 +389,10 @@ class ProvisioningAPI:
         )
 
     async def _resolve_identifier(self, number: str, user: u.User) -> pu.Puppet:
-        number = normalize_number(number)
+        try:
+            number = normalize_number(number)
+        except Exception as e:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(e)}), headers=self._headers)
 
         puppet: pu.Puppet = await pu.Puppet.get_by_address(Address(number=number))
         assert puppet, "Puppet.get_by_address with create=True can't return None"

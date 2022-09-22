@@ -29,11 +29,12 @@ from mausignald.types import (
     OwnReadReceipt,
     ReceiptMessage,
     ReceiptType,
+    StorageChange,
     TypingAction,
     TypingMessage,
     WebsocketConnectionStateChangeEvent,
 )
-from mautrix.types import EventID, MessageType, TextMessageEventContent
+from mautrix.types import EventID, Format, MessageType, TextMessageEventContent
 from mautrix.util.logging import TraceLogger
 from mautrix.util.opt_prometheus import Counter
 
@@ -66,6 +67,7 @@ class SignalHandler(SignaldClient):
         self.error_message_events = {}
         self.add_event_handler(IncomingMessage, self.on_message)
         self.add_event_handler(ErrorMessage, self.on_error_message)
+        self.add_event_handler(StorageChange, self.on_storage_change)
         self.add_event_handler(
             WebsocketConnectionStateChangeEvent, self.on_websocket_connection_state_change
         )
@@ -165,6 +167,11 @@ class SignalHandler(SignaldClient):
             finally:
                 fut.set_result(event_id)
 
+    async def on_storage_change(self, storage_change: StorageChange) -> None:
+        self.log.info("Handling StorageChange %s", str(storage_change))
+        if user := await u.User.get_by_username(storage_change.account):
+            await user.sync()
+
     @staticmethod
     async def on_websocket_connection_state_change(
         evt: WebsocketConnectionStateChangeEvent,
@@ -193,7 +200,7 @@ class SignalHandler(SignaldClient):
         addr_override: Address | None = None,
     ) -> None:
         if msg.profile_key_update:
-            self.log.debug("Ignoring profile key update")
+            asyncio.create_task(user.sync_contact(sender.address, use_cache=False))
             return
         if msg.group_v2:
             portal = await po.Portal.get_by_chat_id(msg.group_v2.id, create=True)
@@ -232,15 +239,28 @@ class SignalHandler(SignaldClient):
                     f"Failed to create room for incoming message {msg.timestamp}, dropping message"
                 )
                 return
+        elif (
+            msg.group_v2
+            and msg.group_v2.group_change
+            and msg.group_v2.revision == portal.revision + 1
+        ):
+            self.log.debug(
+                f"Got update for {msg.group_v2.id} ({portal.revision} -> "
+                f"{msg.group_v2.revision}), applying diff"
+            )
+            await portal.handle_signal_group_change(msg.group_v2.group_change, user)
         elif msg.group_v2 and msg.group_v2.revision > portal.revision:
-            self.log.debug(f"Got new revision of {msg.group_v2.id}, updating info")
-            await portal.update_info(user, msg.group_v2, sender)
+            self.log.debug(
+                f"Got update with multiple revisions for {msg.group_v2.id} ({portal.revision} -> "
+                f"{msg.group_v2.revision}), resyncing info"
+            )
+            await portal.update_info(user, msg.group_v2)
+        if msg.expires_in_seconds is not None and (msg.is_message or msg.is_expiration_update):
+            await portal.update_expires_in_seconds(sender, msg.expires_in_seconds)
         if msg.reaction:
             await portal.handle_signal_reaction(sender, msg.reaction, msg.timestamp)
         if msg.is_message:
             await portal.handle_signal_message(user, sender, msg)
-            if msg.expires_in_seconds is not None:
-                await portal.update_expires_in_seconds(sender, msg.expires_in_seconds)
         if msg.group and msg.group.type == "UPDATE":
             await portal.update_info(user, msg.group)
         if msg.remote_delete:
@@ -279,7 +299,12 @@ class SignalHandler(SignaldClient):
             portal.log.debug(f"Unhandled call message. Likely an ICE message. {msg.call_message}")
             return
 
-        await sender.intent_for(portal).send_text(portal.mxid, html=msg_html, msgtype=msg_type)
+        await portal._send_message(
+            intent=sender.intent_for(portal),
+            content=TextMessageEventContent(
+                format=Format.HTML, formatted_body=msg_html, msgtype=msg_type
+            ),
+        )
 
     @staticmethod
     async def handle_own_receipts(sender: pu.Puppet, receipts: list[OwnReadReceipt]) -> None:

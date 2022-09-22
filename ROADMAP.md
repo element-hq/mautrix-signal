@@ -10,18 +10,18 @@
       * [x] Audio files
       * [x] Files
       * [x] Gifs
-      * [ ] Locations
+      * [x] Locations
       * [ ] Stickers
   * [x] Message reactions
   * [x] Message redactions
   * [x] Group info changes
     * [x] Name
     * [x] Avatar
-  * [ ] Membership actions
+  * [x] Membership actions
     * [x] Join (accept invite)
-    * [ ] Invite
+    * [x] Invite
     * [x] Leave
-    * [ ] Kick
+    * [x] Kick/Ban/Unban
   * [ ] Typing notifications
   * [ ] Read receipts (currently partial support, only marks last message)
   * [x] Delivery receipts (sent after message is bridged)
