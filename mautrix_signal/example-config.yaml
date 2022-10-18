@@ -313,7 +313,7 @@ bridge:
     # Google Maps: 'https://www.google.com/maps/place/{lat},{long}'
     # OpenStreetMap: 'https://www.openstreetmap.org/?mlat={lat}&mlon={long}'
     location_format: 'https://www.google.com/maps/place/{lat},{long}'
-    
+
     # Limit usage of the bridge
     limits:
         # The maximum number of bridge puppets that can be "active" before the limit is reached
@@ -329,7 +329,7 @@ bridge:
         block_ends_notification: 'The bridge is no longer blocking messages.'
         # The minimum interval between blocking notification being sent
         block_notification_interval_seconds: 3600
-    
+
     # Do not send invites to Matrix users. Use for debugging only.
     noop_invites: False
 

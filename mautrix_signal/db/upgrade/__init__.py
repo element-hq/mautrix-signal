@@ -2,7 +2,7 @@ from mautrix.util.async_db import UpgradeTable
 
 upgrade_table = UpgradeTable()
 
-from . import (
+from . import (  # isort:skip
     v00_latest_revision,
     v02_portal_avatar_info,
     v03_puppet_base_url,
