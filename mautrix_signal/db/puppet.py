@@ -26,7 +26,7 @@ import asyncpg
 
 from mausignald.types import Address
 from mautrix.types import ContentURI, SyncToken, UserID
-from mautrix.util.async_db import Database
+from mautrix.util.async_db import Connection, Database
 
 fake_db = Database.create("") if TYPE_CHECKING else None
 log = logging.getLogger("puppet")
@@ -42,6 +42,7 @@ class Puppet:
     uuid: UUID | None
     number: str | None
     name: str | None
+    name_quality: int
     avatar_hash: str | None
     avatar_url: ContentURI | None
     name_set: bool
@@ -62,17 +63,18 @@ class Puppet:
         return str(self.base_url) if self.base_url else None
 
     async def insert(self) -> None:
-        q = (
-            "INSERT INTO puppet (uuid, number, name, avatar_hash, avatar_url, name_set, "
-            "                    avatar_set, uuid_registered, number_registered, "
-            "                    custom_mxid, access_token, next_batch, base_url) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
-        )
+        q = """
+        INSERT INTO puppet (uuid, number, name, name_quality, avatar_hash, avatar_url, name_set,
+                            avatar_set, uuid_registered, number_registered,
+                            custom_mxid, access_token, next_batch, base_url)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        """
         await self.db.execute(
             q,
             self.uuid,
             self.number,
             self.name,
+            self.name_quality,
             self.avatar_hash,
             self.avatar_url,
             self.name_set,
@@ -102,9 +104,7 @@ class Puppet:
             await self._update_number_to_uuid(conn, number, str(self.uuid))
 
     @staticmethod
-    async def _update_number_to_uuid(
-        conn: asyncpg.Connection, old_number: str, new_uuid: str
-    ) -> None:
+    async def _update_number_to_uuid(conn: Connection, old_number: str, new_uuid: str) -> None:
         try:
             async with conn.transaction():
                 await conn.execute(
@@ -117,9 +117,9 @@ class Puppet:
 
     async def update(self) -> None:
         set_columns = (
-            "name=$3, avatar_hash=$4, avatar_url=$5, name_set=$6, avatar_set=$7, "
-            "uuid_registered=$8, number_registered=$9, "
-            "custom_mxid=$10, access_token=$11, next_batch=$12, base_url=$13"
+            "name=$3, name_quality=$4, avatar_hash=$5, avatar_url=$6, name_set=$7, avatar_set=$8, "
+            "uuid_registered=$9, number_registered=$10, "
+            "custom_mxid=$11, access_token=$12, next_batch=$13, base_url=$14"
         )
         q = (
             f"UPDATE puppet SET uuid=$1, {set_columns} WHERE number=$2"
@@ -131,6 +131,7 @@ class Puppet:
             self.uuid,
             self.number,
             self.name,
+            self.name_quality,
             self.avatar_hash,
             self.avatar_url,
             self.name_set,
@@ -168,7 +169,7 @@ class Puppet:
         return cls(base_url=base_url, **data)
 
     _select_base = (
-        "SELECT uuid, number, name, avatar_hash, avatar_url, name_set, avatar_set, "
+        "SELECT uuid, number, name, name_quality, avatar_hash, avatar_url, name_set, avatar_set, "
         "       uuid_registered, number_registered, custom_mxid, access_token, "
         "       next_batch, base_url, first_activity_ts, last_activity_ts "
         "FROM puppet"

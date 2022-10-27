@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from mautrix.bridge import BaseMatrixHandler
+from mautrix.bridge import BaseMatrixHandler, RejectMatrixInvite
 from mautrix.types import (
     Event,
     EventID,
@@ -54,6 +54,21 @@ class MatrixHandler(BaseMatrixHandler):
 
         super().__init__(bridge=bridge)
 
+    async def handle_invite(
+        self, room_id: RoomID, user_id: UserID, inviter: u.User, event_id: EventID
+    ) -> None:
+        user = await u.User.get_by_mxid(user_id, create=False)
+        if not user or not await user.is_logged_in():
+            return
+        portal = await po.Portal.get_by_mxid(room_id)
+        if portal and not portal.is_direct:
+            try:
+                await portal.handle_matrix_invite(inviter, user)
+            except RejectMatrixInvite as e:
+                await portal.main_intent.send_notice(
+                    portal.mxid, f"Failed to invite {user.mxid} on Signal: {e}"
+                )
+
     async def send_welcome_message(self, room_id: RoomID, inviter: u.User) -> None:
         await super().send_welcome_message(room_id, inviter)
         if not inviter.notice_room:
@@ -84,6 +99,57 @@ class MatrixHandler(BaseMatrixHandler):
             return
 
         await portal.handle_matrix_join(user)
+
+    async def handle_kick_ban(
+        self,
+        action: str,
+        room_id: RoomID,
+        user_id: UserID,
+        sender: UserID,
+        reason: str,
+        event_id: EventID,
+    ) -> None:
+        self.log.debug(f"{user_id} was {action} from {room_id} by {sender} for {reason}")
+        portal = await po.Portal.get_by_mxid(room_id)
+        if not portal:
+            return
+
+        if user_id == self.az.bot_mxid:
+            if portal.is_direct:
+                await portal.unbridge()
+            return
+
+        sender = await u.User.get_by_mxid(sender)
+        sender, is_relay = await portal.get_relay_sender(sender, "kick/ban")
+        if not sender:
+            return
+
+        user = await pu.Puppet.get_by_mxid(user_id)
+        if not user:
+            user = await u.User.get_by_mxid(user_id, create=False)
+            if not user or not await user.is_logged_in():
+                return
+        if action == "banned":
+            await portal.ban_matrix(user, sender)
+        elif action == "kicked":
+            await portal.kick_matrix(user, sender)
+        else:
+            await portal.unban_matrix(user, sender)
+
+    async def handle_kick(
+        self, room_id: RoomID, user_id: UserID, kicked_by: UserID, reason: str, event_id: EventID
+    ) -> None:
+        await self.handle_kick_ban("kicked", room_id, user_id, kicked_by, reason, event_id)
+
+    async def handle_unban(
+        self, room_id: RoomID, user_id: UserID, unbanned_by: UserID, reason: str, event_id: EventID
+    ) -> None:
+        await self.handle_kick_ban("unbanned", room_id, user_id, unbanned_by, reason, event_id)
+
+    async def handle_ban(
+        self, room_id: RoomID, user_id: UserID, banned_by: UserID, reason: str, event_id: EventID
+    ) -> None:
+        await self.handle_kick_ban("banned", room_id, user_id, banned_by, reason, event_id)
 
     @classmethod
     async def handle_reaction(
@@ -128,8 +194,11 @@ class MatrixHandler(BaseMatrixHandler):
         event_id: EventID,
         data: SingleReceiptEventContent,
     ) -> None:
-        message = await DBMessage.get_by_mxid(event_id, portal.mxid)
+        message = await DBMessage.get_by_mxid(
+            event_id, portal.mxid
+        ) or await DBMessage.get_first_before(portal.mxid, data.ts)
         if not message:
+            user.log.warning("Skipping sending read receipt for event ID: %s", event_id)
             return
 
         user.log.trace(f"Sending read receipt for {message.timestamp} to {message.sender}")
@@ -173,7 +242,13 @@ class MatrixHandler(BaseMatrixHandler):
             await super().handle_ephemeral_event(evt)
 
     async def handle_state_event(self, evt: StateEvent) -> None:
-        if evt.type not in (EventType.ROOM_NAME, EventType.ROOM_TOPIC, EventType.ROOM_AVATAR):
+        if evt.type not in (
+            EventType.ROOM_NAME,
+            EventType.ROOM_TOPIC,
+            EventType.ROOM_AVATAR,
+            EventType.ROOM_POWER_LEVELS,
+            EventType.ROOM_JOIN_RULES,
+        ):
             return
 
         user = await u.User.get_by_mxid(evt.sender)
@@ -189,6 +264,10 @@ class MatrixHandler(BaseMatrixHandler):
             await portal.handle_matrix_avatar(user, evt.content.url)
         elif evt.type == EventType.ROOM_TOPIC:
             await portal.handle_matrix_topic(user, evt.content.topic)
+        elif evt.type == EventType.ROOM_POWER_LEVELS:
+            await portal.handle_matrix_power_level(user, evt.content, evt.unsigned.prev_content)
+        elif evt.type == EventType.ROOM_JOIN_RULES:
+            await portal.handle_matrix_join_rules(user, evt.content.join_rule)
 
     async def allow_message(self, user: u.User) -> bool:
         return user.relay_whitelisted
