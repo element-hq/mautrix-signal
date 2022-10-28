@@ -35,9 +35,9 @@ linkified_version = {linkified_version!r}
 setuptools.setup(
     name="mautrix-signal",
     version=version,
-    url="https://github.com/mautrix/signal",
+    url="https://github.com/vector-im/mautrix-signal",
     project_urls={
-        "Changelog": "https://github.com/mautrix/signal/blob/master/CHANGELOG.md",
+        "Changelog": "https://github.com/vector-im/mautrix-signal/blob/master/CHANGELOG.md",
     },
 
     author="Tulir Asokan",

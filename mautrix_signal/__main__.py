@@ -49,7 +49,7 @@ class SignalBridge(Bridge):
     name = "mautrix-signal"
     command = "python -m mautrix-signal"
     description = "A Matrix-Signal puppeting bridge."
-    repo_url = "https://github.com/mautrix/signal"
+    repo_url = "https://github.com/vector-im/mautrix-signal"
     version = version
     markdown_version = linkified_version
     config_class = Config
