@@ -19,5 +19,5 @@ from . import upgrade_table
 
 
 @upgrade_table.register(description="Store puppet name quality in database")
-async def upgrade_v10(conn: Connection) -> None:
+async def upgrade_v11(conn: Connection) -> None:
     await conn.execute("ALTER TABLE puppet ADD COLUMN name_quality INTEGER NOT NULL DEFAULT 0")
