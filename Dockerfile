@@ -41,6 +41,7 @@ RUN apk add --virtual .build-deps python3-dev libffi-dev build-base \
  && apk del .build-deps
 
 COPY . /opt/mautrix-signal
+RUN ./check-upgrade-numbers.sh
 RUN apk add git && pip3 install --no-cache-dir .[all] && apk del git \
   # This doesn't make the image smaller, but it's needed so that the `version` command works properly
   && cp mautrix_signal/example-config.yaml . && rm -rf mautrix_signal .git build
