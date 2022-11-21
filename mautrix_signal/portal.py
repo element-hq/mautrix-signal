@@ -26,16 +26,22 @@ import os.path
 import pathlib
 import time
 
-from mausignald.errors import AttachmentTooLargeError, NotConnected, RPCError
+from mausignald.errors import (
+    AttachmentTooLargeError,
+    NotConnected,
+    ProfileUnavailableError,
+    RPCError,
+)
 from mausignald.types import (
     AccessControlMode,
     Address,
     AnnouncementsMode,
     Attachment,
-    Contact,
     Group,
     GroupAccessControl,
+    GroupChange,
     GroupID,
+    GroupMember,
     GroupMemberRole,
     GroupV2,
     GroupV2ID,
@@ -50,10 +56,11 @@ from mausignald.types import (
     Sticker,
 )
 from mautrix.appservice import AppService, IntentAPI
-from mautrix.bridge import BasePortal, async_getter_lock
-from mautrix.errors import IntentError, MatrixError, MForbidden
+from mautrix.bridge import BasePortal, RejectMatrixInvite, async_getter_lock
+from mautrix.errors import IntentError, MatrixError, MBadState, MForbidden
 from mautrix.types import (
     AudioInfo,
+    BeeperMessageStatusEventContent,
     ContentURI,
     EncryptedEvent,
     EncryptedFile,
@@ -61,12 +68,17 @@ from mautrix.types import (
     EventType,
     FileInfo,
     ImageInfo,
+    JoinRule,
     MediaMessageEventContent,
     Membership,
     MessageEvent,
     MessageEventContent,
+    MessageStatus,
+    MessageStatusReason,
     MessageType,
     PowerLevelStateEventContent,
+    RelatesTo,
+    RelationType,
     RoomID,
     TextMessageEventContent,
     UserID,
@@ -108,8 +120,8 @@ except ImportError:
 
 StateBridge = EventType.find("m.bridge", EventType.Class.STATE)
 StateHalfShotBridge = EventType.find("uk.half-shot.bridge", EventType.Class.STATE)
-ChatInfo = Union[Group, GroupV2, GroupV2ID, Contact, Profile, Address]
-MAX_MATRIX_MESSAGE_SIZE = 60000
+ChatInfo = Union[Group, GroupV2, GroupV2ID, Profile, Address]
+MAX_MATRIX_MESSAGE_SIZE = 30000
 BEEPER_LINK_PREVIEWS_KEY = "com.beeper.linkpreviews"
 BEEPER_IMAGE_ENCRYPTION_KEY = "beeper:image:encryption"
 
@@ -291,7 +303,8 @@ class Portal(DBPortal, BasePortal):
         return str(path)
 
     async def _download_matrix_media(self, message: MediaMessageEventContent) -> str:
-        if message.info and message.info.size and message.info.size > 100 * 10 ** 6:
+        # Signal limits files to 100 MB
+        if message.info and message.info.size and message.info.size > 100 * 10**6:
             raise AttachmentTooLargeError({"filename": message.body})
         if message.file:
             data = await self.main_intent.download_media(message.file.url)
@@ -324,12 +337,55 @@ class Portal(DBPortal, BasePortal):
                 status, event_id, self.mxid, EventType.ROOM_MESSAGE, message.msgtype, error=e
             )
             await sender.handle_auth_failure(e)
-            await self._send_message(
-                self.main_intent,
-                TextMessageEventContent(
-                    msgtype=MessageType.NOTICE, body=f"\u26a0 Your message was not bridged: {e}"
-                ),
-            )
+            await self._send_error_notice("message", e)
+            asyncio.create_task(self._send_message_status(event_id, e))
+
+    async def _send_error_notice(self, type_name: str, err: Exception) -> None:
+        if not self.config["bridge.delivery_error_reports"]:
+            return
+        message = f"{type(err).__name__}: {err}"
+        if isinstance(err, NotConnected):
+            message = "There was an error connecting to signald."
+        elif isinstance(err, UnknownReactionTarget):
+            message = "Could not find message to react to on Signal."
+        await self._send_message(
+            self.main_intent,
+            TextMessageEventContent(
+                msgtype=MessageType.NOTICE,
+                body=f"\u26a0 Your {type_name} was not bridged: {message}",
+            ),
+        )
+
+    async def _send_message_status(self, event_id: EventID, err: Exception | None) -> None:
+        if not self.config["bridge.message_status_events"]:
+            return
+        intent = self.az.intent if self.encrypted else self.main_intent
+        status = BeeperMessageStatusEventContent(
+            network=self.bridge_info_state_key,
+            relates_to=RelatesTo(
+                rel_type=RelationType.REFERENCE,
+                event_id=event_id,
+            ),
+        )
+        if err:
+            status.reason = MessageStatusReason.GENERIC_ERROR
+            status.error = str(err)
+            if isinstance(err, AttachmentTooLargeError):
+                status.reason = MessageStatusReason.UNSUPPORTED
+                status.status = MessageStatus.FAIL
+                status.message = "too large file (maximum is 100MB)"
+            elif isinstance(err, UnknownReactionTarget):
+                status.status = MessageStatus.FAIL
+            else:
+                status.status = MessageStatus.RETRIABLE
+        else:
+            status.status = MessageStatus.SUCCESS
+        status.fill_legacy_booleans()
+        await intent.send_message_event(
+            room_id=self.mxid,
+            event_type=EventType.BEEPER_MESSAGE_STATUS,
+            content=status,
+        )
 
     async def _beeper_link_preview_to_signal(
         self, beeper_link_preview: dict[str, Any]
@@ -405,65 +461,87 @@ class Portal(DBPortal, BasePortal):
             attachments = [attachment]
             text = message.body if is_relay else None
             self.log.trace("Formed outgoing attachment %s", attachment)
+        elif message.msgtype == MessageType.LOCATION:
+            try:
+                lat, long = message.geo_uri[len("geo:") :].split(";")[0].split(",")
+                text = self.config["bridge.location_format"].format(
+                    lat=float(lat), long=float(long)
+                )
+            except (ValueError, KeyError, IndexError) as e:
+                orig_sender.send_remote_checkpoint(
+                    status=MessageSendCheckpointStatus.PERM_FAILURE,
+                    event_id=event_id,
+                    room_id=self.mxid,
+                    event_type=EventType.ROOM_MESSAGE,
+                    message_type=message.msgtype,
+                    error=str(e),
+                )
+                self.log.warning(f"Malformed geo URI in {event_id}: {e}")
+                return
+            extev = message.get("org.matrix.msc3488.location", None)
+            # TODO support relay mode with extensible event location descriptions
+            if extev and not is_relay:
+                body = extev.get("description")
+            else:
+                body = message.body
+            if body:
+                text = f"{body}\n{text}"
         else:
             self.log.debug(f"Unknown msgtype {message.msgtype} in Matrix message {event_id}")
             return
 
         self.log.debug(f"Sending Matrix message {event_id} to Signal with timestamp {request_id}")
-        try:
-            retry_count = await self._signal_send_with_retries(
-                sender,
-                event_id,
-                message_type=message.msgtype,
-                send_fn=lambda *args, **kwargs: self.signal.send(**kwargs),
-                event_type=EventType.ROOM_MESSAGE,
-                username=sender.username,
-                recipient=self.chat_id,
-                body=text,
-                mentions=mentions,
-                previews=link_previews,
-                quote=quote,
-                attachments=attachments,
-                timestamp=request_id,
-            )
-        except Exception:
-            self.log.exception("Sending message failed")
-            raise
-        else:
-            sender.send_remote_checkpoint(
-                MessageSendCheckpointStatus.SUCCESS,
-                event_id,
-                self.mxid,
-                EventType.ROOM_MESSAGE,
-                message.msgtype,
-                retry_num=retry_count,
-            )
-            await self._send_delivery_receipt(event_id)
+        retry_count = await self._signal_send_with_retries(
+            sender,
+            event_id,
+            message_type=message.msgtype,
+            send_fn=lambda *args, **kwargs: self.signal.send(**kwargs),
+            event_type=EventType.ROOM_MESSAGE,
+            username=sender.username,
+            recipient=self.chat_id,
+            body=text,
+            mentions=mentions,
+            previews=link_previews,
+            quote=quote,
+            attachments=attachments,
+            timestamp=request_id,
+        )
 
-            msg = DBMessage(
-                mxid=event_id,
-                mx_room=self.mxid,
-                sender=sender.address,
-                timestamp=request_id,
-                signal_chat_id=self.chat_id,
-                signal_receiver=self.receiver,
-            )
-            await msg.insert()
-            self.log.info(
-                f"Handled Matrix message roomId={self.mxid} evtId={event_id} msgType={message.msgtype} reqId={request_id} chatId={self.chat_id}"
-            )
-            if attachment_path and self.config["signal.remove_file_after_handling"]:
-                try:
-                    os.remove(attachment_path)
-                except FileNotFoundError:
-                    pass
+        msg = DBMessage(
+            mxid=event_id,
+            mx_room=self.mxid,
+            sender=sender.address,
+            timestamp=request_id,
+            signal_chat_id=self.chat_id,
+            signal_receiver=self.receiver,
+        )
+        await msg.insert()
+        self.log.info(
+            f"Handled Matrix message roomId={self.mxid} evtId={event_id} msgType={message.msgtype} reqId={request_id} chatId={self.chat_id}"
+        )
+        if attachment_path and self.config["signal.remove_file_after_handling"]:
+            try:
+                os.remove(attachment_path)
+            except FileNotFoundError:
+                pass
 
-            # Handle disappearing messages
-            if self.expiration_time and self.disappearing_enabled:
-                dm = DisappearingMessage(self.mxid, event_id, self.expiration_time)
-                dm.start_timer()
-                await dm.insert()
-                await self._disappear_event(dm)
+        # Handle disappearing messages
+        if self.expiration_time and self.disappearing_enabled:
+            dm = DisappearingMessage(self.mxid, event_id, self.expiration_time)
+            dm.start_timer()
+            await dm.insert()
+            asyncio.create_task(self._disappear_event(dm))
+
+        sender.send_remote_checkpoint(
+            MessageSendCheckpointStatus.SUCCESS,
+            event_id,
+            self.mxid,
+            EventType.ROOM_MESSAGE,
+            message.msgtype,
+            retry_num=retry_count,
+        )
+        await self._send_delivery_receipt(event_id)
+        asyncio.create_task(self._send_message_status(event_id, err=None))
 
     async def _signal_send_with_retries(
         self,
@@ -474,8 +552,8 @@ class Portal(DBPortal, BasePortal):
         message_type: MessageType | None = None,
         **send_args,
     ) -> int:
-        retry_count = 7
-        retry_message_event_id = None
+        retry_count = 4
+        last_error_type = NotConnected
         for retry_num in range(retry_count):
             try:
                 req_id = uuid4()
@@ -483,19 +561,18 @@ class Portal(DBPortal, BasePortal):
                     f"Send attempt {retry_num}. Attempting to send {event_id} with {req_id}"
                 )
                 await send_fn(sender, event_id, req_id=req_id, **send_args)
-
-                # It was successful.
-                if retry_message_event_id is not None:
-                    await self.main_intent.redact(self.mxid, retry_message_event_id)
                 return retry_num
             except (NotConnected, UnknownReactionTarget) as e:
+                if retry_num >= retry_count - 1:
+                    break
+                last_error_type = type(e)
                 # Only handle NotConnected and UnknownReactionTarget exceptions so that other
                 # exceptions actually continue to error.
-                sleep_seconds = (retry_num + 1) ** 2
+                sleep_seconds = retry_num * 2 + 1
                 msg = (
-                    f"Not connected to signald. Going to sleep for {sleep_seconds}s. Error: {e}"
+                    f"Not connected to signald. Going to sleep for {sleep_seconds} seconds. Error: {e}"
                     if isinstance(e, NotConnected)
-                    else f"UnknownReactionTarget: Going to sleep for {sleep_seconds}s. Error: {e}"
+                    else f"UnknownReactionTarget: Going to sleep for {sleep_seconds} seconds. Error: {e}"
                 )
                 self.log.exception(msg)
                 sender.send_remote_checkpoint(
@@ -508,34 +585,15 @@ class Portal(DBPortal, BasePortal):
                     retry_num=retry_num,
                 )
 
-                if retry_num > 2:
-                    # User has waited > ~15 seconds, send a notice that we are retrying.
-                    user_friendly_message = (
-                        "There was an error connecting to signald."
-                        if isinstance(e, NotConnected)
-                        else "Could not find message to react to on Signal."
-                    )
-                    event_content = TextMessageEventContent(
-                        MessageType.NOTICE,
-                        f"{user_friendly_message} Waiting for {sleep_seconds} before retrying.",
-                    )
-                    if retry_message_event_id is not None:
-                        event_content.set_edit(retry_message_event_id)
-                    new_event_id = await self.main_intent.send_message(self.mxid, event_content)
-                    retry_message_event_id = retry_message_event_id or new_event_id
-
                 await asyncio.sleep(sleep_seconds)
             except Exception as e:
                 await sender.handle_auth_failure(e)
                 raise
-
-        if retry_message_event_id is not None:
-            await self.main_intent.redact(self.mxid, retry_message_event_id)
         event_type_name = {
             EventType.ROOM_MESSAGE: "message",
             EventType.REACTION: "reaction",
         }.get(event_type, str(event_type))
-        raise NotConnected(f"Failed to send {event_type_name} after {retry_count} retries.")
+        raise last_error_type(f"Failed to send {event_type_name} after {retry_count} retries.")
 
     async def handle_matrix_reaction(
         self, sender: u.User, event_id: EventID, reacting_to: EventID, emoji: str
@@ -556,7 +614,7 @@ class Portal(DBPortal, BasePortal):
                 emoji=emoji,
             )
         except Exception as e:
-            self.log.exception("Sending reaction failed")
+            self.log.exception(f"Failed to handle Matrix reaction {event_id} to {reacting_to}")
             sender.send_remote_checkpoint(
                 MessageSendCheckpointStatus.PERM_FAILURE,
                 event_id,
@@ -564,7 +622,9 @@ class Portal(DBPortal, BasePortal):
                 EventType.REACTION,
                 error=e,
             )
+            await self._send_error_notice("reaction", e)
             await sender.handle_auth_failure(e)
+            asyncio.create_task(self._send_message_status(event_id, e))
         else:
             sender.send_remote_checkpoint(
                 MessageSendCheckpointStatus.SUCCESS,
@@ -574,6 +634,7 @@ class Portal(DBPortal, BasePortal):
                 retry_num=retry_count,
             )
             await self._send_delivery_receipt(event_id)
+            asyncio.create_task(self._send_message_status(event_id, err=None))
 
     async def _handle_matrix_reaction(
         self,
@@ -627,7 +688,10 @@ class Portal(DBPortal, BasePortal):
                     sender.username, recipient=self.chat_id, timestamp=message.timestamp
                 )
             except Exception as e:
-                self.log.exception("Removing message failed")
+                self.log.exception(
+                    f"Failed to handle Matrix redaction {redaction_event_id} of "
+                    f"message {event_id} ({message.timestamp})"
+                )
                 sender.send_remote_checkpoint(
                     MessageSendCheckpointStatus.PERM_FAILURE,
                     redaction_event_id,
@@ -636,6 +700,8 @@ class Portal(DBPortal, BasePortal):
                     error=e,
                 )
                 await sender.handle_auth_failure(e)
+                asyncio.create_task(self._send_error_notice("message deletion", e))
+                asyncio.create_task(self._send_message_status(event_id, e))
             else:
                 self.log.trace(f"Removed {message} after Matrix redaction")
                 sender.send_remote_checkpoint(
@@ -645,6 +711,7 @@ class Portal(DBPortal, BasePortal):
                     EventType.ROOM_REDACTION,
                 )
                 await self._send_delivery_receipt(redaction_event_id)
+                asyncio.create_task(self._send_message_status(redaction_event_id, err=None))
             return
 
         reaction = await DBReaction.get_by_mxid(event_id, self.mxid)
@@ -661,7 +728,10 @@ class Portal(DBPortal, BasePortal):
                     username=sender.username, recipient=self.chat_id, reaction=remove_reaction
                 )
             except Exception as e:
-                self.log.exception("Removing reaction failed")
+                self.log.exception(
+                    f"Failed to handle Matrix redaction {redaction_event_id} of "
+                    f"reaction {event_id} to {reaction.msg_timestamp}"
+                )
                 sender.send_remote_checkpoint(
                     MessageSendCheckpointStatus.PERM_FAILURE,
                     redaction_event_id,
@@ -670,6 +740,8 @@ class Portal(DBPortal, BasePortal):
                     error=e,
                 )
                 await sender.handle_auth_failure(e)
+                asyncio.create_task(self._send_error_notice("reaction deletion", e))
+                asyncio.create_task(self._send_message_status(event_id, e))
             else:
                 self.log.trace(f"Removed {reaction} after Matrix redaction")
                 sender.send_remote_checkpoint(
@@ -679,6 +751,7 @@ class Portal(DBPortal, BasePortal):
                     EventType.ROOM_REDACTION,
                 )
                 await self._send_delivery_receipt(redaction_event_id)
+                asyncio.create_task(self._send_message_status(redaction_event_id, err=None))
             return
 
         sender.send_remote_checkpoint(
@@ -686,8 +759,10 @@ class Portal(DBPortal, BasePortal):
             redaction_event_id,
             self.mxid,
             EventType.ROOM_REDACTION,
-            error=f"No message or reaction found for redaction",
+            error="No message or reaction found for redaction",
         )
+        status_err = UnknownReactionTarget("No message or reaction found for redaction")
+        asyncio.create_task(self._send_message_status(redaction_event_id, err=status_err))
 
     async def handle_matrix_join(self, user: u.User) -> None:
         if self.is_direct or not await user.is_logged_in():
@@ -728,7 +803,102 @@ class Portal(DBPortal, BasePortal):
                 await self.cleanup_and_delete()
         else:
             self.log.debug(f"{user.mxid} left portal to {self.chat_id}")
+            if self.config["bridge.bridge_matrix_leave"]:
+                await self.signal.leave_group(user.username, self.chat_id)
             # TODO cleanup if empty
+
+    async def kick_matrix(self, user: u.User | p.Puppet, source: u.User) -> None:
+        try:
+            await self.signal.update_group(
+                source.username, self.chat_id, remove_members=[user.address]
+            )
+        except Exception as e:
+            self.log.exception(f"Failed to kick Signal user: {e}")
+            info = await self.signal.get_group(source.username, self.chat_id)
+            if user.address in info.members:
+                await self.main_intent.invite_user(
+                    self.mxid,
+                    user.mxid,
+                    check_cache=True,
+                    reason=f"Failed to kick Signal user: {e}",
+                )
+                await user.intent_for(self).ensure_joined(self.mxid)
+
+    async def ban_matrix(self, user: u.User | p.Puppet, source: u.User) -> None:
+        try:
+            await self.signal.ban_user(source.username, self.chat_id, users=[user.address])
+        except Exception as e:
+            self.log.exception(f"Failed to ban Signal user: {e}")
+            info = await self.signal.get_group(source.username, self.chat_id)
+            is_banned = False
+            if info.banned_members:
+                for member in info.banned_members:
+                    is_banned = user.address.uuid == member.uuid or is_banned
+            if not is_banned:
+                await self.main_intent.unban_user(
+                    self.mxid, user.mxid, reason=f"Failed to ban Signal user: {e}"
+                )
+            if user.address in info.members:
+                await self.main_intent.invite_user(
+                    self.mxid,
+                    user.mxid,
+                    check_cache=True,
+                )
+                await user.intent_for(self).ensure_joined(self.mxid)
+
+    async def unban_matrix(self, user: u.User | p.Puppet, source: u.User) -> None:
+        try:
+            await self.signal.unban_user(source.username, self.chat_id, users=[user.address])
+        except Exception as e:
+            self.log.exception(f"Failed to unban Signal user: {e}")
+            info = await self.signal.get_group(source.username, self.chat_id)
+            if info.banned_members:
+                for member in info.banned_members:
+                    if member.uuid == user.address.uuid:
+                        await self.main_intent.ban_user(
+                            self.mxid, user.mxid, reason=f"Failed to unban Signal user: {e}"
+                        )
+                        return
+
+    async def handle_matrix_invite(self, invited_by: u.User, user: u.User | p.Puppet) -> None:
+        if self.is_direct:
+            raise RejectMatrixInvite("You can't invite additional users to private chats.")
+
+        try:
+            await self.signal.update_group(
+                invited_by.username, self.chat_id, add_members=[user.address]
+            )
+        except RPCError as e:
+            raise RejectMatrixInvite(str(e)) from e
+        if user.mxid == self.config["bridge.relay.relaybot"] != "@relaybot:example.com":
+            await self._handle_relaybot_invited(user)
+        power_levels = await self.main_intent.get_power_levels(self.mxid)
+        invitee_pl = power_levels.get_user_level(user.mxid)
+        if invitee_pl >= 50:
+            group_member = GroupMember(uuid=user.uuid, role=GroupMemberRole.ADMINISTRATOR)
+            try:
+                update_meta = await self.signal.update_group(
+                    invited_by.username, self.chat_id, update_role=group_member
+                )
+                self.revision = update_meta.revision
+            except Exception as e:
+                self.log.exception(f"Failed to update Signal member role: {e}")
+                await self._update_power_levels(
+                    await self.signal.get_group(invited_by.username, self.chat_id)
+                )
+
+    async def _handle_relaybot_invited(self, user: u.User) -> None:
+        if not self.config["bridge.relay.enabled"]:
+            await self.main_intent.send_notice(
+                self.mxid, "Relay mode is not enabled in this instance of the bridge."
+            )
+        else:
+            await self.set_relay_user(user)
+            await self.main_intent.send_notice(
+                self.mxid,
+                "Messages from non-logged-in users in this room will now be bridged "
+                "through the relaybot's Signal account.",
+            )
 
     async def handle_matrix_name(self, user: u.User, name: str) -> None:
         if self.name == name or self.is_direct or not name:
@@ -793,6 +963,127 @@ class Portal(DBPortal, BasePortal):
                 os.remove(path)
             except FileNotFoundError:
                 pass
+
+    async def handle_matrix_power_level(
+        self,
+        sender: u.User,
+        levels: PowerLevelStateEventContent,
+        prev_content: PowerLevelStateEventContent | None = None,
+    ) -> None:
+        old_users = prev_content.users if prev_content else None
+        new_users = levels.users
+        changes = {}
+        sender, is_relay = await self.get_relay_sender(sender, "power level change")
+        if not sender:
+            return
+
+        if not old_users:
+            changes = new_users
+        else:
+            for user, level in new_users.items():
+                if (
+                    user
+                    and user != self.main_intent.mxid
+                    and (user not in old_users or level != old_users[user])
+                ):
+                    changes[user] = level
+            for user, level in old_users.items():
+                if user and user != self.main_intent.mxid and user not in new_users:
+                    changes[user] = levels.users_default
+        if changes:
+            for user, level in changes.items():
+                address = p.Puppet.get_id_from_mxid(user)
+                if not address:
+                    mx_user = await u.User.get_by_mxid(user, create=False)
+                    if not mx_user or not mx_user.is_logged_in:
+                        continue
+                    address = mx_user.address
+                if not address or not address.uuid:
+                    continue
+                signal_role = (
+                    GroupMemberRole.DEFAULT if level < 50 else GroupMemberRole.ADMINISTRATOR
+                )
+                group_member = GroupMember(uuid=address.uuid, role=signal_role)
+                try:
+                    update_meta = await self.signal.update_group(
+                        sender.username, self.chat_id, update_role=group_member
+                    )
+                    self.revision = update_meta.revision
+                except Exception as e:
+                    self.log.exception(f"Failed to update Signal member role: {e}")
+                    await self._update_power_levels(
+                        await self.signal.get_group(sender.username, self.chat_id)
+                    )
+                    return
+        if not prev_content or levels.invite != prev_content.invite:
+            try:
+                update_meta = await self.signal.update_group(
+                    username=sender.username,
+                    group_id=self.chat_id,
+                    update_access_control=GroupAccessControl(
+                        members=(
+                            AccessControlMode.MEMBER
+                            if levels.invite == 0
+                            else AccessControlMode.ADMINISTRATOR
+                        ),
+                        attributes=None,
+                        link=None,
+                    ),
+                )
+                self.revision = update_meta.revision
+            except Exception as e:
+                self.log.exception(f"Failed to update Signal member add permission: {e}")
+                await self._update_power_levels(
+                    await self.signal.get_group(sender.username, self.chat_id)
+                )
+                return
+        if not prev_content or levels.state_default != prev_content.state_default:
+            try:
+                update_meta = await self.signal.update_group(
+                    username=sender.username,
+                    group_id=self.chat_id,
+                    update_access_control=GroupAccessControl(
+                        attributes=(
+                            AccessControlMode.MEMBER
+                            if levels.state_default == 0
+                            else AccessControlMode.ADMINISTRATOR
+                        ),
+                        members=None,
+                        link=None,
+                    ),
+                )
+                self.revision = update_meta.revision
+            except Exception as e:
+                self.log.exception(f"Failed to update Signal metadata change permission: {e}")
+                await self._update_power_levels(
+                    await self.signal.get_group(sender.username, self.chat_id)
+                )
+
+    async def handle_matrix_join_rules(self, sender: u.User, join_rule: JoinRule) -> None:
+        if join_rule == JoinRule.PUBLIC:
+            link_access = AccessControlMode.ANY
+        elif join_rule == JoinRule.INVITE:
+            link_access = AccessControlMode.UNSATISFIABLE
+        else:
+            link_access = AccessControlMode.ADMINISTRATOR
+        sender, is_relay = await self.get_relay_sender(sender, "join_rule change")
+        if not sender:
+            return
+
+        try:
+            update_meta = await self.signal.update_group(
+                sender.username,
+                self.chat_id,
+                update_access_control=GroupAccessControl(
+                    attributes=None, members=None, link=link_access
+                ),
+            )
+            self.revision = update_meta.revision
+        except Exception as e:
+            self.log.exception(f"Failed to update Signal link access control: {e}")
+            await self._update_join_rules(
+                await self.signal.get_group(sender.username, self.chat_id)
+            )
 
     # endregion
     # region Signal event handling
@@ -946,6 +1237,16 @@ class Portal(DBPortal, BasePortal):
                 and attachment.content_type == "text/x-signal-plain"
                 and attachment.size < MAX_MATRIX_MESSAGE_SIZE
             )
+
+            file_size = attachment.size or os.path.getsize(attachment.incoming_filename)
+            if file_size > self.matrix.media_config.upload_size:
+                self.log.warning(
+                    "Failed to bridge attachment %s in %s: file too large",
+                    attachment.id,
+                    message.timestamp,
+                )
+                continue
+
             content = await self._handle_signal_attachment(intent, attachment, text=as_text)
             if as_text:
                 is_first_text = False
@@ -995,7 +1296,219 @@ class Portal(DBPortal, BasePortal):
 
     async def handle_signal_kicked(self, user: u.User, sender: p.Puppet) -> None:
         self.log.debug(f"{user.mxid} was kicked by {sender.number} from {self.mxid}")
-        await self.main_intent.kick_user(self.mxid, user.mxid, f"{sender.name} kicked you")
+        await self._kick_with_puppet(user, sender)
+
+    async def handle_signal_group_change(self, group_change: GroupChange, source: u.User) -> None:
+        if self.revision < group_change.revision:
+            self.revision = group_change.revision
+        else:
+            return
+        editor = await p.Puppet.get_by_address(group_change.editor)
+        editor_intent = editor.intent_for(self)
+        if (
+            group_change.delete_members
+            or group_change.delete_pending_members
+            or group_change.delete_requesting_members
+        ):
+            for address in (
+                (group_change.delete_members or [])
+                + (group_change.delete_pending_members or [])
+                + (group_change.delete_requesting_members or [])
+            ):
+                users = [
+                    await p.Puppet.get_by_address(address),
+                    await u.User.get_by_address(address),
+                ]
+                for user in users:
+                    if not user:
+                        continue
+                    if user == editor:
+                        await editor_intent.leave_room(self.mxid)
+                    else:
+                        await self._kick_with_puppet(user, editor)
+
+        if group_change.modify_member_roles:
+            levels = await editor.intent_for(self).get_power_levels(self.mxid)
+            for group_member in group_change.modify_member_roles:
+                users = [
+                    await p.Puppet.get_by_address(group_member.address),
+                    await u.User.get_by_uuid(group_member.uuid),
+                ]
+                for user in users:
+                    if not user:
+                        continue
+                    if (
+                        group_member.role == GroupMemberRole.ADMINISTRATOR
+                        and levels.users.get(user.mxid, 0) < 50
+                    ):
+                        levels.users[user.mxid] = 50
+                        levels.users = {k: v for k, v in sorted(list(levels.users.items()))}
+                    elif levels.users.get(user.mxid, 0) >= 50:
+                        levels.users.pop(user.mxid, 0)
+            await self._try_with_puppet(
+                lambda i: i.set_power_levels(self.mxid, levels), puppet=editor
+            )
+
+        if group_change.new_banned_members:
+            for banned_member in group_change.new_banned_members:
+                users = [
+                    await p.Puppet.get_by_address(banned_member.address),
+                    await u.User.get_by_uuid(banned_member.uuid),
+                ]
+                for user in users:
+                    if not user:
+                        continue
+                    try:
+                        await editor_intent.ban_user(self.mxid, user.mxid)
+                    except MForbidden:
+                        try:
+                            await self.main_intent.ban_user(
+                                self.mxid, user.mxid, reason=f"banned by {editor.name}"
+                            )
+                        except MForbidden as e:
+                            self.log.debug(f"Could not ban {user.mxid}: {e}")
+                    except MBadState as e:
+                        self.log.debug(f"Could not ban {user.mxid}: {e}")
+
+        if group_change.new_unbanned_members:
+            for banned_member in group_change.new_unbanned_members:
+                users = [
+                    await p.Puppet.get_by_address(banned_member.address),
+                    await u.User.get_by_uuid(banned_member.uuid),
+                ]
+                for user in users:
+                    if not user:
+                        continue
+                    try:
+                        await editor_intent.unban_user(self.mxid, user.mxid)
+                    except MForbidden:
+                        try:
+                            await self.main_intent.unban_user(
+                                self.mxid, user.mxid, reason=f"unbanned by {editor.name}"
+                            )
+                        except MForbidden as e:
+                            self.log.debug(f"Could not unban {user.mxid}: {e}")
+                    except MBadState as e:
+                        self.log.debug(f"Could not unban {user.mxid}: {e}")
+
+        if (
+            group_change.new_members
+            or group_change.new_pending_members
+            or group_change.promote_requesting_members
+        ):
+            banned_users = await self.az.intent.get_room_members(self.mxid, (Membership.BAN,))
+            for group_member in (
+                (group_change.new_members or [])
+                + (group_change.new_pending_members or [])
+                + (group_change.promote_requesting_members or [])
+            ):
+                puppet = await p.Puppet.get_by_address(group_member.address)
+                await source.sync_contact(group_member.address)
+                users = [puppet, await u.User.get_by_uuid(group_member.uuid)]
+                for user in users:
+                    if not user:
+                        continue
+                    if user.mxid in banned_users:
+                        await self._try_with_puppet(
+                            lambda i: i.unban_user(self.mxid, user.mxid), puppet=editor
+                        )
+                    try:
+                        await editor_intent.invite_user(self.mxid, user.mxid, check_cache=True)
+                    except (MForbidden, IntentError):
+                        try:
+                            await self.main_intent.invite_user(
+                                self.mxid,
+                                user.mxid,
+                                reason=f"invited by {editor.name}",
+                                check_cache=True,
+                            )
+                        except (MForbidden, IntentError) as e:
+                            self.log.debug(f"{editor.name} could not invite {user.mxid}: {e}")
+                    except MBadState as e:
+                        self.log.debug(f"{editor.name} could not invite {user.mxid}: {e}")
+                    if group_member in (group_change.new_members or []) + (
+                        group_change.promote_requesting_members or []
+                    ) and isinstance(user, p.Puppet):
+                        try:
+                            await user.intent_for(self).ensure_joined(self.mxid)
+                        except IntentError as e:
+                            self.log.debug(f"{user.name} could not join group: {e}")
+
+        if group_change.promote_pending_members:
+            for group_member in group_change.promote_pending_members:
+                await source.sync_contact(group_member.address)
+                user = await p.Puppet.get_by_address(group_member.address)
+                if not user:
+                    continue
+                try:
+                    await user.intent_for(self).ensure_joined(self.mxid)
+                except IntentError as e:
+                    self.log.debug(f"{user.name} could not join group: {e}")
+
+        if group_change.new_requesting_members:
+            for group_member in group_change.new_requesting_members:
+                try:
+                    await source.sync_contact(group_member.address)
+                except ProfileUnavailableError:
+                    self.log.debug(
+                        f"Profile of puppet with uuid {group_member.uuid} is unavailable"
+                    )
+                user = await p.Puppet.get_by_address(group_member.address)
+                try:
+                    await user.intent_for(self).knock_room(self.mxid, reason="via invite link")
+                except (MForbidden, MBadState) as e:
+                    self.log.debug(f"{user.name} failed knock: {e}")
+
+        if group_change.new_access_control:
+            ac = group_change.new_access_control
+            if ac.attributes or ac.members:
+                levels = await editor.intent_for(self).get_power_levels(self.mxid)
+                if ac.attributes:
+                    meta_edit_level = 50 if ac.attributes == AccessControlMode.ADMINISTRATOR else 0
+                    levels.events[EventType.ROOM_NAME] = meta_edit_level
+                    levels.events[EventType.ROOM_AVATAR] = meta_edit_level
+                    levels.events[EventType.ROOM_TOPIC] = meta_edit_level
+                if ac.members:
+                    levels.invite = 50 if ac.members == AccessControlMode.ADMINISTRATOR else 0
+                await self._try_with_puppet(
+                    lambda i: i.set_power_levels(self.mxid, levels), puppet=editor
+                )
+            if ac.link:
+                new_join_rule = await self._get_new_join_rule(ac.link)
+                if new_join_rule:
+                    await self._try_with_puppet(
+                        lambda i: i.set_join_rule(self.mxid, new_join_rule), puppet=editor
+                    )
+
+        if group_change.new_is_announcement_group:
+            levels = await editor.intent_for(self).get_power_levels(self.mxid)
+            if group_change.new_is_announcement_group == AnnouncementsMode.ENABLED:
+                levels.events_default = 50
+            elif group_change.new_is_announcement_group == AnnouncementsMode.DISABLED:
+                levels.events_default = 0
+            await self._try_with_puppet(
+                lambda i: i.set_power_levels(self.mxid, levels), puppet=editor
+            )
+
+        changed = False
+        if group_change.new_description:
+            changed = await self._update_topic(group_change.new_description, editor)
+        if group_change.new_title:
+            changed = await self._update_name(group_change.new_title, editor) or changed
+        if group_change.new_avatar:
+            changed = (
+                await self._update_avatar(
+                    await self.signal.get_group(
+                        source.username, self.chat_id, group_change.revision
+                    ),
+                    editor,
+                )
+                or changed
+            )
+
+        if changed:
+            await self.update_bridge_info()
+            await self.update()
 
     @staticmethod
     async def _make_media_content(
@@ -1251,19 +1764,79 @@ class Portal(DBPortal, BasePortal):
             await self.main_intent.redact(message.mx_room, message.mxid)
 
     # endregion
+    # region Matrix -> Signal metadata
+
+    async def create_signal_group(
+        self, source: u.User, levels: PowerLevelStateEventContent, join_rule: JoinRule
+    ) -> None:
+        user_mxids = await self.az.intent.get_room_members(
+            self.mxid, (Membership.JOIN, Membership.INVITE)
+        )
+        invitee_addresses = []
+        relaybot_mxid = self.config["bridge.relay.relaybot"]
+        relaybot = None
+        for mxid in user_mxids:
+            mx_user = await u.User.get_by_mxid(mxid, create=False)
+            if mx_user and mx_user.address and mx_user.username != source.username:
+                invitee_addresses.append(mx_user.address)
+                if mxid == relaybot_mxid != "@relaybot:example.com":
+                    relaybot = mx_user
+            puppet = await p.Puppet.get_by_mxid(mxid, create=False)
+            if puppet:
+                invitee_addresses.append(puppet.address)
+        avatar_path: str | None = None
+        if self.avatar_url:
+            avatar_data = await self.az.intent.download_media(self.avatar_url)
+            self.avatar_hash = hashlib.sha256(avatar_data).hexdigest()
+            avatar_path = self._write_outgoing_file(avatar_data)
+        signal_chat = await self.signal.create_group(
+            source.username, title=self.name, members=invitee_addresses, avatar_path=avatar_path
+        )
+        self.name_set = bool(self.name and signal_chat.title)
+        self.avatar_set = bool(self.avatar_url and self.avatar_hash and signal_chat.avatar)
+        self.chat_id = signal_chat.id
+        await self._postinit()
+        await self.insert()
+        if avatar_path and self.config["signal.remove_file_after_handling"]:
+            try:
+                os.remove(avatar_path)
+            except FileNotFoundError:
+                pass
+        if self.topic:
+            await self.signal.update_group(source.username, self.chat_id, description=self.topic)
+        await self.handle_matrix_power_level(source, levels)
+        await self.handle_matrix_join_rules(source, join_rule)
+        await self.update()
+        await self.update_bridge_info()
+        if relaybot:
+            await self._handle_relaybot_invited(relaybot)
+
+    async def bridge_signal_group(
+        self, source: u.User, levels: PowerLevelStateEventContent
+    ) -> None:
+        await self._postinit()
+        await self.insert()
+        await self.handle_matrix_power_level(source, levels)
+        await self.update()
+        await self.update_bridge_info()
+
+    # endregion
     # region Updating portal info
 
-    async def update_info(
-        self, source: u.User, info: ChatInfo, sender: p.Puppet | None = None
-    ) -> None:
+    async def update_info(self, source: u.User, info: ChatInfo) -> None:
         if self.is_direct:
-            if not isinstance(info, (Contact, Profile, Address)):
+            if not isinstance(info, (Profile, Address)):
                 raise ValueError(f"Unexpected type for direct chat update_info: {type(info)}")
-            if not self.name:
+            if not self.name or not self.topic:
                 puppet = await self.get_dm_puppet()
                 if not puppet.name:
-                    await puppet.update_info(info)
+                    await puppet.update_info(info, source)
                 self.name = puppet.name
+                if puppet.number and not self.topic:
+                    self.topic = puppet.fmt_phone(puppet.number)
+                    if self.mxid:
+                        # This is only for automatically updating the topic in existing portals
+                        await self.update_puppet_number(self.topic)
             return
 
         if isinstance(info, GroupV2ID):
@@ -1281,7 +1854,7 @@ class Portal(DBPortal, BasePortal):
 
         changed = False
         if isinstance(info, Group):
-            changed = await self._update_name(info.name, sender) or changed
+            changed = await self._update_name(info.name) or changed
         elif isinstance(info, GroupV2):
             if self.revision < info.revision:
                 self.revision = info.revision
@@ -1292,18 +1865,22 @@ class Portal(DBPortal, BasePortal):
                     f"({info.revision} < {self.revision}), ignoring..."
                 )
                 return
-            changed = await self._update_name(info.title, sender) or changed
-            changed = await self._update_topic(info.description, sender) or changed
+            changed = await self._update_name(info.title) or changed
+            changed = await self._update_topic(info.description) or changed
         elif isinstance(info, GroupV2ID):
             return
         else:
             raise ValueError(f"Unexpected type for group update_info: {type(info)}")
-        changed = await self._update_avatar(info, sender) or changed
+        changed = await self._update_avatar(info) or changed
         await self._update_participants(source, info)
         try:
             await self._update_power_levels(info)
         except Exception:
             self.log.warning("Error updating power levels", exc_info=True)
+        try:
+            await self._update_join_rules(info)
+        except:
+            self.log.warning("Error updating join rules", exc_info=True)
         if changed:
             await self.update_bridge_info()
             await self.update()
@@ -1335,6 +1912,17 @@ class Portal(DBPortal, BasePortal):
             puppet = await self.get_dm_puppet()
         await self.update_puppet_name(puppet.name, save=False)
         await self.update_puppet_avatar(puppet.avatar_hash, puppet.avatar_url, save=False)
+        if puppet.number:
+            await self.update_puppet_number(puppet.fmt_phone(puppet.number), save=False)
+
+    async def update_puppet_number(self, number: str, save: bool = True) -> None:
+        if not self.encrypted and not self.private_chat_portal_meta:
+            return
+
+        changed = await self._update_topic(number)
+        if changed and save:
+            await self.update_bridge_info()
+            await self.update()
 
     async def update_puppet_avatar(
         self, new_hash: str, avatar_url: ContentURI, save: bool = True
@@ -1433,75 +2021,74 @@ class Portal(DBPortal, BasePortal):
         if not self.mxid or not isinstance(info, (Group, GroupV2)):
             return
 
-        # Drop any users that should NOT be in the room
-        if not self.config["bridge.relay.enabled"]:
-            members_to_drop = set(
-                await self.main_intent.get_room_members(
-                    self.mxid, (Membership.INVITE, Membership.JOIN)
-                )
-            )
-            members_to_drop.discard(self.az.bot_mxid)
-        else:
-            # Don't drop users if we're a relay, because relays allow Matrix users to sit in rooms
-            # without a linked account.
-            members_to_drop = {}
+        member_events = await self.main_intent.get_members(self.mxid)
+        remove_users: set[UserID] = {
+            UserID(evt.state_key)
+            for evt in member_events
+            if evt.content.membership == Membership.JOIN and evt.state_key != self.az.bot_mxid
+        }
 
         pending_members = info.pending_members if isinstance(info, GroupV2) else []
         self._pending_members = {addr.uuid for addr in pending_members}
         self.log.debug(
             f"_update_participants called with {len(pending_members)} pending members and {len(info.members)} members"
         )
-        for address in info.members:
-            try:
-                user = await u.User.get_by_address(address)
-                if user:
-                    members_to_drop.discard(user.mxid)
-                    self.log.debug(
-                        f"_update_participants info.members inviting {user.mxid} to {self.mxid}"
-                    )
-                    if self.config["bridge.noop_invites"] != True:
-                        await self.main_intent.invite_user(self.mxid, user.mxid)
-                puppet = await p.Puppet.get_by_address(address)
-                puppet_intent = puppet.intent_for(self)
-                await source.sync_contact(address)
-                await puppet_intent.ensure_joined(self.mxid)
-                members_to_drop.discard(puppet_intent.mxid)
-            except Exception as ex:
-                self.log.warning(f"failed to join member {address}", ex)
+        for address in info.members + pending_members:
+            user = await u.User.get_by_address(address)
+            if user:
+                remove_users.discard(user.mxid)
+                try:
+                    await self.main_intent.invite_user(self.mxid, user.mxid, check_cache=True)
+                except (MForbidden, IntentError, MBadState) as e:
+                    self.log.debug(f"could not invite {user.mxid}: {e}")
 
-        for address in pending_members:
+            puppet = await p.Puppet.get_by_address(address)
             try:
-                user = await u.User.get_by_address(address)
-                if user:
-                    members_to_drop.discard(user.mxid)
-                    self.log.debug(
-                        f"_update_participants info.pending_members inviting {user.mxid} to {self.mxid}"
-                    )
-                    if self.config["bridge.noop_invites"] != True:
-                        await self.main_intent.invite_user(self.mxid, user.mxid)
-
-                puppet = await p.Puppet.get_by_address(address)
                 await source.sync_contact(address)
-                pending_mxid = puppet.intent_for(self).mxid
-                self.log.debug(
-                    f"_update_participants info.pending_members inviting {pending_mxid} to {self.mxid}"
+            except ProfileUnavailableError:
+                self.log.debug(f"Profile of puppet with {address} is unavailable")
+            try:
+                await self.main_intent.invite_user(
+                    self.mxid, puppet.intent_for(self).mxid, check_cache=True
                 )
-                members_to_drop.discard(pending_mxid)
-                await self.main_intent.invite_user(self.mxid, pending_mxid)
-            except Exception as ex:
-                self.log.warning(f"failed to invite pending_member {address}", ex)
+            except (MForbidden, IntentError, MBadState) as e:
+                self.log.debug(f"could not invite {user.mxid}: {e}")
+            if not address.uuid in self._pending_members:
+                await puppet.intent_for(self).ensure_joined(self.mxid)
+            remove_users.discard(puppet.default_mxid)
 
-        if len(members_to_drop) > 0:
-            self.log.warning(
-                f"_update_participants is dropping {members_to_drop} from {self.mxid}"
-            )
-        for member in members_to_drop:
+        for mxid in remove_users:
+            user = await u.User.get_by_mxid(mxid, create=False)
+            if user and await user.is_logged_in():
+                try:
+                    await self.main_intent.kick_user(
+                        self.mxid, user.mxid, reason="not a member of this Signal group"
+                    )
+                except (MForbidden, MBadState) as e:
+                    self.log.debug(f"could not kick {user.mxid}: {e}")
+            puppet = await p.Puppet.get_by_mxid(mxid, create=False)
+            if puppet:
+                try:
+                    await self.main_intent.kick_user(
+                        self.mxid,
+                        puppet.intent_for(self).mxid,
+                        reason="not a member of this Signal group",
+                    )
+                except (MForbidden, MBadState) as e:
+                    self.log.debug(f"could not kick {user.mxid}: {e}")
+
+    async def _kick_with_puppet(self, user: p.Puppet | u.User, sender: p.Puppet) -> None:
+        try:
+            await sender.intent_for(self).kick_user(self.mxid, user.mxid)
+        except MForbidden:
             try:
                 await self.main_intent.kick_user(
-                    self.mxid, member, "You are not part of this conversation."
+                    self.mxid, user.mxid, reason=f"removed by {sender.name}"
                 )
-            except Exception as ex:
-                self.log.warning(f"failed to kick {member} from {self.mxid}", ex)
+            except MForbidden as e:
+                self.log.debug(f"Could not remove {user.mxid}: {e}")
+        except MBadState as e:
+            self.log.debug(f"Could not remove {user.mxid}: {e}")
 
     async def _update_power_levels(self, info: ChatInfo) -> None:
         if not self.mxid:
@@ -1510,6 +2097,41 @@ class Portal(DBPortal, BasePortal):
         power_levels = await self.main_intent.get_power_levels(self.mxid)
         power_levels = await self._get_power_levels(power_levels, info=info, is_initial=False)
         await self.main_intent.set_power_levels(self.mxid, power_levels)
+
+    async def _get_new_join_rule(self, link_access: AccessControlMode) -> JoinRule | None:
+        if not self.mxid:
+            return None
+        old_join_rule = await self._get_join_rule()
+        if link_access == AccessControlMode.ANY:
+            # Default to invite since chat that don't require admin approval don't allow knocks
+            join_rule = (
+                JoinRule.PUBLIC if self.config["bridge.public_portals"] else JoinRule.INVITE
+            )
+            allowed_join_rules = (JoinRule.PUBLIC, JoinRule.INVITE)
+        elif link_access == AccessControlMode.ADMINISTRATOR:
+            join_rule = JoinRule.KNOCK
+            # TODO remove getattr once mautrix-python is updated
+            allowed_join_rules = (
+                JoinRule.KNOCK,
+                getattr(JoinRule, "KNOCK_RESTRICTED", "knock_restricted"),
+            )
+        else:
+            join_rule = JoinRule.INVITE
+            allowed_join_rules = (JoinRule.INVITE,)
+        if old_join_rule in allowed_join_rules:
+            return None
+        return join_rule
+
+    async def _update_join_rules(self, info: ChatInfo) -> None:
+        if not self.mxid:
+            return
+        new_join_rule = await self._get_new_join_rule(info.access_control.link)
+        if new_join_rule:
+            await self.main_intent.set_join_rule(self.mxid, new_join_rule)
+
+    async def _get_join_rule(self) -> JoinRule | None:
+        evt = await self.main_intent.get_state_event(self.mxid, EventType.ROOM_JOIN_RULES)
+        return evt.join_rule if evt else None
 
     # endregion
     # region Bridge info state event
@@ -1557,7 +2179,7 @@ class Portal(DBPortal, BasePortal):
     async def update_matrix_room(self, source: u.User, info: ChatInfo) -> None:
         if not self.is_direct and not isinstance(info, (Group, GroupV2, GroupV2ID)):
             raise ValueError(f"Unexpected type for updating group portal: {type(info)}")
-        elif self.is_direct and not isinstance(info, (Contact, Profile, Address)):
+        elif self.is_direct and not isinstance(info, (Profile, Address)):
             raise ValueError(f"Unexpected type for updating direct chat portal: {type(info)}")
         try:
             await self._update_matrix_room(source, info)
@@ -1567,7 +2189,7 @@ class Portal(DBPortal, BasePortal):
     async def create_matrix_room(self, source: u.User, info: ChatInfo) -> RoomID | None:
         if not self.is_direct and not isinstance(info, (Group, GroupV2, GroupV2ID)):
             raise ValueError(f"Unexpected type for creating group portal: {type(info)}")
-        elif self.is_direct and not isinstance(info, (Contact, Profile, Address)):
+        elif self.is_direct and not isinstance(info, (Profile, Address)):
             raise ValueError(f"Unexpected type for creating direct chat portal: {type(info)}")
         if isinstance(info, Group) and not info.members:
             try:
@@ -1630,6 +2252,7 @@ class Portal(DBPortal, BasePortal):
         is_initial: bool = False,
     ) -> PowerLevelStateEventContent:
         levels = levels or PowerLevelStateEventContent()
+        bot_pl = levels.get_user_level(self.az.bot_mxid)
         levels.events_default = 0
         if self.is_direct:
             levels.ban = 99
@@ -1642,8 +2265,23 @@ class Portal(DBPortal, BasePortal):
                 ac = info.access_control
                 for detail in info.member_detail + info.pending_member_detail:
                     puppet = await p.Puppet.get_by_address(Address(uuid=detail.uuid))
-                    level = 50 if detail.role == GroupMemberRole.ADMINISTRATOR else 0
-                    levels.users[puppet.intent_for(self).mxid] = level
+                    puppet_mxid = puppet.intent_for(self).mxid
+                    current_level = levels.get_user_level(puppet_mxid)
+                    if bot_pl > current_level and bot_pl >= 50:
+                        level = current_level
+                        if puppet.is_real_user:
+                            if current_level >= 50 and detail.role == GroupMemberRole.DEFAULT:
+                                level = 0
+                            elif (
+                                current_level < 50 and detail.role == GroupMemberRole.ADMINISTRATOR
+                            ):
+                                level = 50
+                        else:
+                            level = 50 if detail.role == GroupMemberRole.ADMINISTRATOR else 0
+                        if level == 0:
+                            levels.users.pop(puppet_mxid, None)
+                        else:
+                            levels.users[puppet_mxid] = level
                 announcements = info.announcements
             else:
                 ac = GroupAccessControl()
@@ -1666,6 +2304,7 @@ class Portal(DBPortal, BasePortal):
         levels.redact = 99
         if self.main_intent.mxid not in levels.users:
             levels.users[self.main_intent.mxid] = 9001 if is_initial else 100
+        levels.users = {k: v for k, v in sorted(list(levels.users.items()))}
         return levels
 
     async def ensure_portal_has_room(self, source: u.User, info: ChatInfo, msgTs: int):
@@ -1708,7 +2347,7 @@ class Portal(DBPortal, BasePortal):
             initial_state.append(
                 {
                     "type": str(EventType.ROOM_ENCRYPTION),
-                    "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                    "content": self.get_encryption_state_event_json(),
                 }
             )
             if self.is_direct:

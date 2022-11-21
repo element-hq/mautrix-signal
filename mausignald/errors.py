@@ -49,7 +49,7 @@ class UnknownIdentityKey(ResponseError):
     pass
 
 
-class CaptchaRequired(ResponseError):
+class CaptchaRequiredError(ResponseError):
     pass
 
 
@@ -102,18 +102,28 @@ class AttachmentTooLargeError(ResponseError):
         super().__init__(data, message_override="File is over the 100MB limit.")
 
 
+class UnregisteredUserError(ResponseError):
+    pass
+
+
+class ProfileUnavailableError(ResponseError):
+    pass
+
+
 response_error_types = {
     "invalid_request": RequestValidationFailure,
     "TimeoutException": TimeoutException,
     "UserAlreadyExists": UserAlreadyExistsError,
     "RequestValidationFailure": RequestValidationFailure,
     "UnknownIdentityKey": UnknownIdentityKey,
-    "CaptchaRequired": CaptchaRequired,
+    "CaptchaRequiredError": CaptchaRequiredError,
     "InternalError": InternalError,
     "AttachmentTooLargeError": AttachmentTooLargeError,
     "AuthorizationFailedError": AuthorizationFailedError,
     "ScanTimeoutError": ScanTimeoutError,
     "OwnProfileKeyDoesNotExistError": OwnProfileKeyDoesNotExistError,
+    "UnregisteredUserError": UnregisteredUserError,
+    "ProfileUnavailableError": ProfileUnavailableError,
     # TODO add rest from https://gitlab.com/signald/signald/-/tree/main/src/main/java/io/finn/signald/clientprotocol/v1/exceptions
 }
 

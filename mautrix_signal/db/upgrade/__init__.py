@@ -2,7 +2,7 @@ from mautrix.util.async_db import UpgradeTable
 
 upgrade_table = UpgradeTable()
 
-from . import (
+from . import (  # isort:skip
     v00_latest_revision,
     v02_portal_avatar_info,
     v03_puppet_base_url,
@@ -15,4 +15,5 @@ from . import (
     # Since we merged the schema update `v08_user_activity`, all upgrades since `8` must be bumped by one version to avoid a clash. Please do this when merging.
     v09_disappearing_messages,
     v10_group_topic,
+    v11_puppet_name_quality,
 )

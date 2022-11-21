@@ -22,12 +22,18 @@ import logging
 
 from aiohttp import web
 
-from mausignald.errors import InternalError, ScanTimeoutError, TimeoutException
-from mausignald.types import Account, Address
-from mautrix.types import UserID
+from mausignald.errors import (
+    InternalError,
+    ScanTimeoutError,
+    TimeoutException,
+    UnregisteredUserError,
+)
+from mausignald.types import Account, Address, Profile
+from mautrix.types import JSON, UserID
 from mautrix.util.logging import TraceLogger
 
-from .. import user as u
+from .. import portal as po, puppet as pu, user as u
+from ..util import normalize_number
 from .segment_analytics import init as init_segment, track
 
 if TYPE_CHECKING:
@@ -73,6 +79,11 @@ class ProvisioningAPI:
         self.app.router.add_post("/v2/link/wait/scan", self.link_wait_for_scan)
         self.app.router.add_post("/v2/link/wait/account", self.link_wait_for_account)
 
+        # Start new chat API
+        self.app.router.add_get("/v2/contacts", self.list_contacts)
+        self.app.router.add_get("/v2/resolve_identifier/{number}", self.resolve_identifier)
+        self.app.router.add_post("/v2/pm/{number}", self.start_pm)
+
     @property
     def _acao_headers(self) -> dict[str, str]:
         return {
@@ -112,10 +123,22 @@ class ProvisioningAPI:
                 text='{"error": "Missing user_id query param"}', headers=self._headers
             )
 
-        if not self.bridge.signal.is_connected:
-            await self.bridge.signal.wait_for_connected()
+        try:
+            if not self.bridge.signal.is_connected:
+                await self.bridge.signal.wait_for_connected(timeout=10)
+        except asyncio.TimeoutError:
+            raise web.HTTPServiceUnavailable(
+                text=json.dumps({"error": "Cannot connect to signald"}), headers=self._headers
+            )
 
         return await u.User.get_by_mxid(UserID(user_id))
+
+    async def check_token_and_logged_in(self, request: web.Request) -> "u.User":
+        user = await self.check_token(request)
+        if not await user.is_logged_in():
+            error = {"error": "You're not logged in"}
+            raise web.HTTPNotFound(text=json.dumps(error), headers=self._headers)
+        return user
 
     async def status(self, request: web.Request) -> web.Response:
         user = await self.check_token(request)
@@ -178,14 +201,9 @@ class ProvisioningAPI:
                 f"Client cancelled link wait request ({session_id}) before it finished"
             )
             raise
-        except TimeoutException:
+        except (TimeoutException, ScanTimeoutError):
             raise web.HTTPBadRequest(
                 text='{"error": "Signal linking timed out"}', headers=self._headers
-            )
-        except ScanTimeoutError:
-            raise web.HTTPBadRequest(
-                text='{"error": "Signald websocket disconnected before linking finished"}',
-                headers=self._headers,
             )
         except InternalError:
             raise web.HTTPInternalServerError(
@@ -332,11 +350,113 @@ class ProvisioningAPI:
             track(user, "$wait_for_account_failed", error)
             raise web.HTTPBadRequest(text=json.dumps(error), headers=self._headers)
 
+    # endregion
+
+    # region Logout
+
     async def logout(self, request: web.Request) -> web.Response:
-        user = await self.check_token(request)
-        if not await user.is_logged_in():
-            raise web.HTTPNotFound(
-                text="""{"error": "You're not logged in"}""", headers=self._headers
-            )
+        user = await self.check_token_and_logged_in(request)
         await user.logout()
         return web.json_response({}, headers=self._acao_headers)
+
+    # endregion
+
+    # region Start new chat API
+
+    async def list_contacts(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        contacts = await self.bridge.signal.list_contacts(user.username, use_cache=True)
+
+        async def transform(profile: Profile) -> JSON:
+            assert profile.address
+            puppet = await pu.Puppet.get_by_address(profile.address, False)
+            avatar_url = puppet.avatar_url if puppet else None
+            return {
+                "name": profile.name,
+                "contact_name": profile.contact_name,
+                "profile_name": profile.profile_name,
+                "avatar_url": avatar_url,
+                "address": profile.address.serialize(),
+            }
+
+        return web.json_response(
+            {
+                c.address.number: await transform(c)
+                for c in contacts
+                if c.address and c.address.number
+            },
+            headers=self._acao_headers,
+        )
+
+    async def _resolve_identifier(self, number: str, user: u.User) -> pu.Puppet:
+        try:
+            number = normalize_number(number)
+        except Exception as e:
+            raise web.HTTPBadRequest(text=json.dumps({"error": str(e)}), headers=self._headers)
+
+        puppet: pu.Puppet = await pu.Puppet.get_by_address(Address(number=number))
+        assert puppet, "Puppet.get_by_address with create=True can't return None"
+        if not puppet.uuid:
+            try:
+                uuid = await self.bridge.signal.find_uuid(user.username, puppet.number)
+                if uuid:
+                    await puppet.handle_uuid_receive(uuid)
+            except UnregisteredUserError:
+                error = {"error": f"The phone number {number} is not a registered Signal account"}
+                raise web.HTTPNotFound(text=json.dumps(error), headers=self._headers)
+            except Exception:
+                self.log.exception(f"Unknown error fetching UUID for {puppet.number}")
+                error = {"error": "Unknown error while fetching UUID"}
+                raise web.HTTPInternalServerError(text=json.dumps(error), headers=self._headers)
+        return puppet
+
+    async def start_pm(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        puppet = await self._resolve_identifier(request.match_info["number"], user)
+
+        portal = await po.Portal.get_by_chat_id(
+            puppet.address, receiver=user.username, create=True
+        )
+        assert portal, "Portal.get_by_chat_id with create=True can't return None"
+
+        if portal.mxid:
+            await portal.main_intent.invite_user(portal.mxid, user.mxid)
+            just_created = False
+        else:
+            await portal.create_matrix_room(user, puppet.address)
+            just_created = True
+        return web.json_response(
+            {
+                "room_id": portal.mxid,
+                "just_created": just_created,
+                "chat_id": portal.chat_id.serialize(),
+                "other_user": {
+                    "mxid": puppet.mxid,
+                    "displayname": puppet.name,
+                    "avatar_url": puppet.avatar_url,
+                },
+            },
+            headers=self._acao_headers,
+            status=201 if just_created else 200,
+        )
+
+    async def resolve_identifier(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        puppet = await self._resolve_identifier(request.match_info["number"], user)
+        portal = await po.Portal.get_by_chat_id(
+            puppet.address, receiver=user.username, create=False
+        )
+        return web.json_response(
+            {
+                "room_id": portal.mxid if portal else None,
+                "chat_id": puppet.address.serialize(),
+                "other_user": {
+                    "mxid": puppet.mxid,
+                    "displayname": puppet.name,
+                    "avatar_url": puppet.avatar_url,
+                },
+            },
+            headers=self._acao_headers,
+        )
+
+    # endregion

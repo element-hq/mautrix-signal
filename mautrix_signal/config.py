@@ -25,12 +25,6 @@ Permissions = NamedTuple("Permissions", relay=bool, user=bool, admin=bool, level
 
 
 class Config(BaseBridgeConfig):
-    def __getitem__(self, key: str) -> Any:
-        try:
-            return os.environ[f"MAUTRIX_SIGNAL_{key.replace('.', '_').upper()}"]
-        except KeyError:
-            return super().__getitem__(key)
-
     @property
     def forbidden_defaults(self) -> List[ForbiddenDefault]:
         return [
@@ -42,8 +36,6 @@ class Config(BaseBridgeConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
         super().do_update(helper)
         copy, copy_dict, base = helper
-
-        copy("homeserver.asmux")
 
         copy("signal.socket_path")
         copy("signal.outgoing_attachment_dir")
@@ -68,6 +60,7 @@ class Config(BaseBridgeConfig):
         copy("bridge.autocreate_group_portal")
         copy("bridge.autocreate_contact_portal")
         copy("bridge.sync_with_custom_puppets")
+        copy("bridge.public_portals")
         copy("bridge.sync_direct_chat_list")
         copy("bridge.double_puppet_server_map")
         copy("bridge.double_puppet_allow_discovery")
@@ -78,14 +71,10 @@ class Config(BaseBridgeConfig):
         else:
             copy("bridge.login_shared_secret_map")
         copy("bridge.federate_rooms")
-        copy("bridge.encryption.allow")
-        copy("bridge.encryption.default")
-        copy("bridge.encryption.key_sharing.allow")
-        copy("bridge.encryption.key_sharing.require_cross_signing")
-        copy("bridge.encryption.key_sharing.require_verification")
         copy("bridge.private_chat_portal_meta")
         copy("bridge.delivery_receipts")
         copy("bridge.delivery_error_reports")
+        copy("bridge.message_status_events")
         copy("bridge.resend_bridge_info")
         copy("bridge.periodic_sync")
 
@@ -104,6 +93,9 @@ class Config(BaseBridgeConfig):
 
         copy("bridge.relay.enabled")
         copy_dict("bridge.relay.message_formats")
+        copy("bridge.relay.relaybot")
+        copy("bridge.bridge_matrix_leave")
+        copy("bridge.location_format")
 
         copy("bridge.limits.max_puppet_limit")
         copy("bridge.limits.min_puppet_activity_days")

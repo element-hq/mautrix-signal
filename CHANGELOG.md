@@ -1,18 +1,113 @@
-# v0.2.4 (unreleased)
+# v0.4.0 (2022-09-17)
+
+Target signald version: [v0.21.1](https://gitlab.com/signald/signald/-/releases/0.21.1)
+
+**N.B.** This release requires a homeserver with Matrix v1.1 support, which
+bumps up the minimum homeserver versions to Synapse 1.54 and Dendrite 0.8.7.
+Minimum Conduit version remains at 0.4.0.
+
+### Added
+* Added provisioning API for checking if a phone number is registered on Signal
+* Added admin command for linking to an existing account in signald.
+* Added Matrix -> Signal bridging for invites, kicks, bans and unbans
+  (thanks to [@maltee1] in [#246] and [#257]).
+* Added command to create Signal group for existing Matrix room
+  (thanks to [@maltee1] in [#250]).
+* Added Matrix -> Signal power level change bridging
+  (thanks to [@maltee1] in [#260] and [#263]).
+* Added join rule bridging in both directions (thanks to [@maltee1] in [#268]).
+* Added Matrix -> Signal bridging of location messages
+  (thanks to [@maltee1] in [#287]).
+  * Since Signal doesn't have actual location messages, they're just bridged as
+    map links. The link template is configurable.
+* Added command to link devices when the bridge is the primary device
+  (thanks to [@Craeckie] in [#221]).
+* Added command to bridge existing Matrix rooms to existing Signal groups
+  (thanks to [@MaximilianGaedig] in [#288]).
+* Added config option to auto-enable relay mode when a specific user is invited
+  (thanks to [@maltee1] in [#293]).
+* Added options to make encryption more secure.
+  * The `encryption` -> `verification_levels` config options can be used to
+    make the bridge require encrypted messages to come from cross-signed
+    devices, with trust-on-first-use validation of the cross-signing master
+    key.
+  * The `encryption` -> `require` option can be used to make the bridge ignore
+    any unencrypted messages.
+  * Key rotation settings can be configured with the `encryption` -> `rotation`
+    config.
+
+### Improved
+* Improved/fixed handling of disappearing message timer changes.
+* Improved handling profile/contact names and prevented them from being
+  downgraded (switching from profile name to contact name or phone number).
+* Updated contact list provisioning API to not block if signald needs to update
+  profiles.
+* Trying to start a direct chat with a non-existent phone number will now reply
+  with a proper error message instead of throwing an exception
+  (thanks to [@maltee1] in [#265]).
+* Syncing chat members will no longer be interrupted if one of the member
+  profiles is unavailable (thanks to [@maltee1] in [#270]).
+* Group metadata changes are now bridged based on the event itself rather than
+  resyncing the whole group, which means changes will use the correct ghost
+  user instead of always using the bridge bot (thanks to [@maltee1] in [#283]).
+* Added proper captcha error handling when registering
+  (thanks to [@maltee1] in [#280]).
+* Added user's phone number as topic in private chat portals
+  (thanks to [@maltee1] in [#282]).
+
+### Fixed
+* Call start notices work again
+
+[@Craeckie]: https://github.com/Craeckie
+[@MaximilianGaedig]: https://github.com/MaximilianGaedig
+[#221]: https://github.com/mautrix/signal/pull/221
+[#246]: https://github.com/mautrix/signal/pull/246
+[#250]: https://github.com/mautrix/signal/pull/250
+[#257]: https://github.com/mautrix/signal/pull/257
+[#260]: https://github.com/mautrix/signal/pull/260
+[#263]: https://github.com/mautrix/signal/pull/263
+[#265]: https://github.com/mautrix/signal/pull/265
+[#268]: https://github.com/mautrix/signal/pull/268
+[#270]: https://github.com/mautrix/signal/pull/270
+[#280]: https://github.com/mautrix/signal/pull/280
+[#282]: https://github.com/mautrix/signal/pull/282
+[#283]: https://github.com/mautrix/signal/pull/283
+[#287]: https://github.com/mautrix/signal/pull/287
+[#288]: https://github.com/mautrix/signal/pull/288
+[#293]: https://github.com/mautrix/signal/pull/293
+
+# v0.3.0 (2022-04-20)
+
+Target signald version: [v0.18.0](https://gitlab.com/signald/signald/-/releases/0.18.0)
+
+### Important changes
+* Both the signald and mautrix-signal docker images have been changed to run as
+  UID 1337 by default. The migration should work automatically as long as you
+  update both containers at the same time.
+  * Also note that the `finn/signald` image is deprecated, you should use `signald/signald`.
+    <https://signald.org/articles/install/docker/>
+* Old homeservers which don't support the new `/v3` API endpoints are no longer
+  supported. Synapse 1.48+, Dendrite 0.6.5+ and Conduit 0.4.0+ are supported.
+  Legacy `r0` API support can be temporarily re-enabled with `pip install mautrix==0.16.0`.
+  However, this option will not be available in future releases.
 
 ### Added
 * Support for creating DM portals by inviting user (i.e. just making a DM the
   normal Matrix way).
+* Leaving groups is now bridged to Signal (thanks to [@maltee1] in [#245]).
 * Signal group descriptions are now bridged into Matrix room topics.
 * Signal announcement group status is now bridged into power levels on Matrix
   (the group will be read-only for everyone except admins).
 * Added optional parameter to `mark-trusted` command to set trust level
   (instead of always using `TRUSTED_VERIFIED`).
+* Added option to use [MSC2246] async media uploads.
+* Added provisioning API for listing contacts and starting private chats.
 
 ### Improved
 * Dropped Python 3.7 support.
 * Files bridged to Matrix now include the `size` field in the file `info`.
 * Removed redundant `msgtype` field in sticker events sent to Matrix.
+* Users who have left the group on Signal will now be removed from Matrix too.
 
 ### Fixed
 * Logging into the bridge with double puppeting no longer removes your Signal
@@ -20,6 +115,10 @@
 * Fixed identity failure error message always saying "while sending message to
   None" instead of specifying the problematic phone number.
 * Fixed `channel` -> `id` field in `m.bridge` events.
+
+[MSC2246]: https://github.com/matrix-org/matrix-spec-proposals/pull/2246
+[@maltee1]: https://github.com/maltee1
+[#245]: https://github.com/mautrix/signal/pull/245
 
 # v0.2.3 (2022-02-17)
 
