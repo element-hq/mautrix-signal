@@ -159,9 +159,7 @@ class User(DBUser, BaseUser):
     async def get_portal_with(self, puppet: pu.Puppet, create: bool = True) -> po.Portal | None:
         if not self.username:
             return None
-        return await po.Portal.get_by_chat_id(
-            puppet.address, receiver=self.username, create=create
-        )
+        return await po.Portal.get_by_chat_id(puppet.uuid, receiver=self.username, create=create)
 
     async def on_signin(self, account: Account) -> None:
         self.username = account.account_id
@@ -176,14 +174,18 @@ class User(DBUser, BaseUser):
         self, evt: WebsocketConnectionStateChangeEvent
     ) -> None:
         if evt.state == WebsocketConnectionState.CONNECTED:
-            self.log.info("Connected to Signal")
+            self.log.info(f"Connected to Signal (ws: {evt.socket})")
             self._track_metric(METRIC_CONNECTED, True)
             self._track_metric(METRIC_LOGGED_IN, True)
             self._connected = True
         else:
-            self.log.warning(
-                f"New websocket state from signald: {evt.state}. Error: {evt.exception}"
-            )
+            if evt.exception:
+                self.log.error(
+                    f"New {evt.socket} websocket state from signald {evt.state} "
+                    f"with error {evt.exception}"
+                )
+            else:
+                self.log.warning(f"New {evt.socket} websocket state from signald {evt.state}")
             self._track_metric(METRIC_CONNECTED, False)
             self._connected = False
 
@@ -204,7 +206,7 @@ class User(DBUser, BaseUser):
             WebsocketConnectionState.FAILED: BridgeStateEvent.TRANSIENT_DISCONNECT,
         }.get(evt.state)
         if bridge_state is None:
-            self.log.info(f"Websocket state {evt.state} seen. Will not report new Bridge State")
+            self.log.info(f"Websocket state {evt.state} seen, not reporting new bridge state")
             return
 
         now = datetime.now()
@@ -236,8 +238,8 @@ class User(DBUser, BaseUser):
                     )
                 else:
                     self.log.info(
-                        "New state since last TRANSIENT_DISCONNECT push. "
-                        "Not transitioning to UNKNOWN_ERROR."
+                        "New state since last TRANSIENT_DISCONNECT push, "
+                        "not transitioning to UNKNOWN_ERROR."
                     )
 
             asyncio.create_task(wait_report_transient_disconnect())
@@ -248,7 +250,10 @@ class User(DBUser, BaseUser):
         self._websocket_connection_state = bridge_state
 
     async def _sync_puppet(self) -> None:
-        puppet = await pu.Puppet.get_by_address(self.address)
+        puppet = await self.get_puppet()
+        if not puppet:
+            self.log.warning(f"Didn't find puppet for own address {self.address}")
+            return
         if puppet.uuid and not self.uuid:
             self.uuid = puppet.uuid
             self.by_uuid[self.uuid] = self
@@ -263,6 +268,7 @@ class User(DBUser, BaseUser):
         await self.sync_puppet()
         await self.sync_contacts()
         await self.sync_groups()
+        self.log.debug("Sync complete")
 
     async def sync_puppet(self) -> None:
         try:
@@ -306,24 +312,19 @@ class User(DBUser, BaseUser):
             else:
                 address = contact.address
                 profile = contact
-            puppet = await pu.Puppet.get_by_address(address)
+            puppet = await pu.Puppet.get_by_address(address, resolve_via=self.username)
+            if not puppet:
+                self.log.debug(f"Didn't find puppet for {address} while syncing contact")
+                return
             await puppet.update_info(profile or address, self)
             if create_portals:
                 portal = await po.Portal.get_by_chat_id(
-                    puppet.address, receiver=self.username, create=True
+                    puppet.uuid, receiver=self.username, create=True
                 )
                 await portal.create_matrix_room(self, profile or address)
         except Exception as e:
             await self.handle_auth_failure(e)
             raise
-
-    async def _sync_group(self, group: Group, create_portals: bool) -> None:
-        self.log.trace("Syncing group %s", group)
-        portal = await po.Portal.get_by_chat_id(group.group_id, create=True)
-        if create_portals:
-            await portal.create_matrix_room(self, group)
-        elif portal.mxid:
-            await portal.update_matrix_room(self, group)
 
     async def _sync_group_v2(self, group: GroupV2, create_portals: bool) -> None:
         self.log.trace("Syncing group %s", group.id)
@@ -344,16 +345,10 @@ class User(DBUser, BaseUser):
     async def _sync_groups(self) -> None:
         create_group_portal = self.config["bridge.autocreate_group_portal"]
         for group in await self.bridge.signal.list_groups(self.username):
-            group_id = group.group_id if isinstance(group, Group) else group.id
             try:
-                if isinstance(group, Group):
-                    await self._sync_group(group, create_group_portal)
-                elif isinstance(group, GroupV2):
-                    await self._sync_group_v2(group, create_group_portal)
-                else:
-                    self.log.warning("Unknown return type in list_groups: %s", type(group))
+                await self._sync_group_v2(group, create_group_portal)
             except Exception:
-                self.log.exception(f"Failed to sync group {group_id}")
+                self.log.exception(f"Failed to sync group {group.id}")
 
     # region Database getters
 
@@ -366,7 +361,7 @@ class User(DBUser, BaseUser):
 
     @classmethod
     @async_getter_lock
-    async def get_by_mxid(cls, mxid: UserID, create: bool = True) -> User | None:
+    async def get_by_mxid(cls, mxid: UserID, /, *, create: bool = True) -> User | None:
         # Never allow ghosts to be users
         if pu.Puppet.get_id_from_mxid(mxid):
             return None
@@ -390,7 +385,7 @@ class User(DBUser, BaseUser):
 
     @classmethod
     @async_getter_lock
-    async def get_by_username(cls, username: str) -> User | None:
+    async def get_by_username(cls, username: str, /) -> User | None:
         try:
             return cls.by_username[username]
         except KeyError:
@@ -405,7 +400,7 @@ class User(DBUser, BaseUser):
 
     @classmethod
     @async_getter_lock
-    async def get_by_uuid(cls, uuid: UUID) -> User | None:
+    async def get_by_uuid(cls, uuid: UUID, /) -> User | None:
         try:
             return cls.by_uuid[uuid]
         except KeyError:

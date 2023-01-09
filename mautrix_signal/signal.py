@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Awaitable
+from uuid import UUID
 import asyncio
 import logging
 
@@ -58,7 +59,7 @@ class SignalHandler(SignaldClient):
     loop: asyncio.AbstractEventLoop
     data_dir: str
     delete_unknown_accounts: bool
-    error_message_events: dict[tuple[Address, str, int], Awaitable[EventID] | None]
+    error_message_events: dict[tuple[UUID, str, int], Awaitable[EventID] | None]
 
     def __init__(self, bridge: "SignalBridge") -> None:
         super().__init__(bridge.config["signal.socket_path"], loop=bridge.loop)
@@ -73,7 +74,10 @@ class SignalHandler(SignaldClient):
         )
 
     async def on_message(self, evt: IncomingMessage) -> None:
-        sender = await pu.Puppet.get_by_address(evt.source)
+        sender = await pu.Puppet.get_by_address(evt.source, resolve_via=evt.account)
+        if not sender:
+            self.log.warning(f"Didn't find puppet for incoming message {evt.source}")
+            return
         user = await u.User.get_by_username(evt.account)
         # TODO add lots of logging
 
@@ -96,7 +100,15 @@ class SignalHandler(SignaldClient):
                 future = self.handle_own_receipts(sender, evt.sync_message.read_messages)
                 counter_type = "own_receipt"
             if evt.sync_message.sent:
-                future = self.handle_message(
+                if (
+                    evt.sync_message.sent.destination
+                    and not evt.sync_message.sent.destination.uuid
+                ):
+                    self.log.warning(
+                        "Got sent message without destination UUID "
+                        f"{evt.sync_message.sent.destination}"
+                    )
+                await self.handle_message(
                     user,
                     sender,
                     evt.sync_message.sent.message,
@@ -120,7 +132,7 @@ class SignalHandler(SignaldClient):
 
         try:
             event_id_future = self.error_message_events.pop(
-                (sender.address, user.username, evt.timestamp)
+                (sender.uuid, user.username, evt.timestamp)
             )
         except KeyError:
             pass
@@ -128,7 +140,7 @@ class SignalHandler(SignaldClient):
             self.log.debug(f"Got previously errored message {evt.timestamp} from {sender.address}")
             event_id = await event_id_future if event_id_future is not None else None
             if event_id is not None:
-                portal = await po.Portal.get_by_chat_id(sender.address, receiver=user.username)
+                portal = await po.Portal.get_by_chat_id(sender.uuid, receiver=user.username)
                 if portal and portal.mxid:
                     await sender.intent_for(portal).redact(portal.mxid, event_id)
 
@@ -139,16 +151,23 @@ class SignalHandler(SignaldClient):
             f"{err.data.message}"
         )
 
-        sender = await pu.Puppet.get_by_address(Address.parse(err.data.sender))
+        if err.data.content_hint == 2:
+            return
+
+        sender = await pu.Puppet.get_by_address(
+            Address.parse(err.data.sender), resolve_via=err.account
+        )
+        if not sender:
+            return
         user = await u.User.get_by_username(err.account)
-        portal = await po.Portal.get_by_chat_id(sender.address, receiver=user.username)
+        portal = await po.Portal.get_by_chat_id(sender.uuid, receiver=user.username)
         if not portal or not portal.mxid:
             return
 
         # Add the error to the error_message_events dictionary, then wait for 10 seconds until
         # sending an error. If a success for the timestamp comes in before the 10 seconds is up,
         # don't send the error message.
-        error_message_event_key = (sender.address, user.username, err.data.timestamp)
+        error_message_event_key = (sender.uuid, user.username, err.data.timestamp)
         self.error_message_events[error_message_event_key] = None
 
         await asyncio.sleep(10)
@@ -207,8 +226,17 @@ class SignalHandler(SignaldClient):
         elif msg.group:
             portal = await po.Portal.get_by_chat_id(msg.group.group_id, create=True)
         else:
+            if addr_override and not addr_override.uuid:
+                target = await pu.Puppet.get_by_address(addr_override, resolve_via=user.username)
+                if not target:
+                    self.log.warning(
+                        f"Didn't find puppet for recipient of incoming message {addr_override}"
+                    )
+                    return
             portal = await po.Portal.get_by_chat_id(
-                addr_override or sender.address, receiver=user.username, create=True
+                addr_override.uuid if addr_override else sender.uuid,
+                receiver=user.username,
+                create=True,
             )
             if addr_override and not sender.is_real_user:
                 portal.log.debug(
@@ -269,9 +297,7 @@ class SignalHandler(SignaldClient):
     @staticmethod
     async def handle_call_message(user: u.User, sender: pu.Puppet, msg: IncomingMessage) -> None:
         assert msg.call_message
-        portal = await po.Portal.get_by_chat_id(
-            sender.address, receiver=user.username, create=True
-        )
+        portal = await po.Portal.get_by_chat_id(sender.uuid, receiver=user.username, create=True)
         if not portal.mxid:
             # FIXME
             # await portal.create_matrix_room(
@@ -284,16 +310,20 @@ class SignalHandler(SignaldClient):
             #     )
             return
 
-        msg_html = f'<a href="https://matrix.to/#/{sender.mxid}">{sender.name}</a>'
+        msg_prefix_html = f'<a href="https://matrix.to/#/{sender.mxid}">{sender.name}</a>'
+        msg_prefix_text = f"{sender.name}"
+        msg_suffix = ""
         if msg.call_message.offer_message:
             call_type = {
                 OfferMessageType.AUDIO_CALL: "voice call",
                 OfferMessageType.VIDEO_CALL: "video call",
             }.get(msg.call_message.offer_message.type, "call")
-            msg_html += f" started a {call_type} on Signal. Use the native app to answer the call."
+            msg_suffix = (
+                f" started a {call_type} on Signal. Use the native app to answer the call."
+            )
             msg_type = MessageType.TEXT
         elif msg.call_message.hangup_message:
-            msg_html += " ended a call on Signal."
+            msg_suffix = " ended a call on Signal."
             msg_type = MessageType.NOTICE
         else:
             portal.log.debug(f"Unhandled call message. Likely an ICE message. {msg.call_message}")
@@ -302,7 +332,10 @@ class SignalHandler(SignaldClient):
         await portal._send_message(
             intent=sender.intent_for(portal),
             content=TextMessageEventContent(
-                format=Format.HTML, formatted_body=msg_html, msgtype=msg_type
+                format=Format.HTML,
+                formatted_body=msg_prefix_html + msg_suffix,
+                body=msg_prefix_text + msg_suffix,
+                msgtype=msg_type,
             ),
         )
 
@@ -312,7 +345,7 @@ class SignalHandler(SignaldClient):
             puppet = await pu.Puppet.get_by_address(receipt.sender, create=False)
             if not puppet:
                 continue
-            message = await DBMessage.find_by_sender_timestamp(puppet.address, receipt.timestamp)
+            message = await DBMessage.find_by_sender_timestamp(puppet.uuid, receipt.timestamp)
             if not message:
                 continue
             portal = await po.Portal.get_by_mxid(message.mx_room)
@@ -325,7 +358,7 @@ class SignalHandler(SignaldClient):
         if typing.group_id:
             portal = await po.Portal.get_by_chat_id(typing.group_id)
         else:
-            portal = await po.Portal.get_by_chat_id(sender.address, receiver=user.username)
+            portal = await po.Portal.get_by_chat_id(sender.uuid, receiver=user.username)
         if not portal or not portal.mxid:
             return
         is_typing = typing.action == TypingAction.STARTED
@@ -351,6 +384,9 @@ class SignalHandler(SignaldClient):
             try:
                 known_usernames.add(user.username)
                 if await self.subscribe(user.username):
+                    self.log.info(
+                        f"Successfully subscribed {user.username}, running sync in background"
+                    )
                     asyncio.create_task(user.sync())
             except Exception as ex:
                 # Don't hold up the whole bridge over this.
@@ -361,6 +397,8 @@ class SignalHandler(SignaldClient):
                 if account.account_id not in known_usernames:
                     self.log.warning(f"Unknown account ID {account.account_id}, deleting...")
                     await self.delete_account(account.account_id)
+            else:
+                self.log.debug("No unknown accounts found")
 
     async def stop(self) -> None:
         await self.disconnect()

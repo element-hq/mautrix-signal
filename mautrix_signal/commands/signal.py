@@ -23,6 +23,7 @@ import json
 from mausignald.errors import UnknownIdentityKey, UnregisteredUserError
 from mausignald.types import Address, GroupID, TrustLevel
 from mautrix.appservice import IntentAPI
+from mautrix.bridge import RejectMatrixInvite
 from mautrix.bridge.commands import SECTION_ADMIN, HelpSection, command_handler
 from mautrix.types import (
     ContentURI,
@@ -57,16 +58,22 @@ async def _get_puppet_from_cmd(evt: CommandEvent) -> pu.Puppet | None:
         )
         return None
 
-    puppet: pu.Puppet = await pu.Puppet.get_by_address(Address(number=phone))
-    if not puppet.uuid and evt.sender.username:
+    puppet: pu.Puppet = await pu.Puppet.get_by_number(phone)
+    if not puppet:
+        if not evt.sender.username:
+            await evt.reply("UUID of user not known")
+            return None
         try:
-            uuid = await evt.bridge.signal.find_uuid(evt.sender.username, puppet.number)
+            uuid = await evt.bridge.signal.find_uuid(evt.sender.username, phone)
         except UnregisteredUserError:
             await evt.reply("User not registered")
             return None
 
         if uuid:
-            await puppet.handle_uuid_receive(uuid)
+            puppet = await pu.Puppet.get_by_uuid(uuid)
+        else:
+            await evt.reply("UUID of user not found")
+            return None
     return puppet
 
 
@@ -99,9 +106,7 @@ async def pm(evt: CommandEvent) -> None:
     puppet = await _get_puppet_from_cmd(evt)
     if not puppet:
         return
-    portal = await po.Portal.get_by_chat_id(
-        puppet.address, receiver=evt.sender.username, create=True
-    )
+    portal = await po.Portal.get_by_chat_id(puppet.uuid, receiver=evt.sender.username, create=True)
     if portal.mxid:
         await evt.reply(
             f"You already have a private chat with {puppet.name}: "
@@ -172,7 +177,7 @@ async def safety_number(evt: CommandEvent) -> None:
             return
         evt.args = evt.args[1:]
     if len(evt.args) == 0 and evt.portal and evt.portal.is_direct:
-        puppet = await pu.Puppet.get_by_address(evt.portal.chat_id)
+        puppet = await evt.portal.get_dm_puppet()
     else:
         puppet = await _get_puppet_from_cmd(evt)
     if not puppet:
@@ -337,6 +342,9 @@ async def create(evt: CommandEvent) -> EventID:
     title, about, levels, encrypted, avatar_url, join_rule = await get_initial_state(
         evt.az.intent, evt.room_id
     )
+
+    if not title:
+        return await evt.reply("Please set a room name before creating a Signal group.")
 
     portal = po.Portal(
         chat_id=GroupID(""),
@@ -582,3 +590,29 @@ async def warn_missing_power(levels: PowerLevelStateEventContent, evt: CommandEv
         or levels.events[EventType.ROOM_TOPIC] >= 50
     ):
         await evt.reply(meta_power_warning)
+
+
+@command_handler(
+    needs_auth=False,
+    management_only=False,
+    help_section=SECTION_SIGNAL,
+    help_text="Invite a Signal user by phone number",
+    help_args="<_phone_>",
+)
+async def invite(evt: CommandEvent) -> EventID | None:
+    if not evt.is_portal:
+        return await evt.reply("This is not a portal room.")
+    portal = evt.portal
+    puppet = await _get_puppet_from_cmd(evt)
+    if not puppet:
+        return None
+    levels = await portal.main_intent.get_power_levels(portal.mxid)
+    if levels.get_user_level(puppet.mxid) < levels.invite:
+        return await evt.reply("You do not have permissions to invite users to this room")
+
+    try:
+        info = await portal.handle_matrix_invite(evt.sender, puppet)
+        sender, is_relay = await portal.get_relay_sender(evt.sender, "updating info")
+        await portal.update_info(sender, info)
+    except RejectMatrixInvite as e:
+        return await evt.reply(f"Failed to invite {puppet.name}: {e}")

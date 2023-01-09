@@ -16,4 +16,6 @@ from . import (  # isort:skip
     v09_disappearing_messages,
     v10_group_topic,
     v11_puppet_name_quality,
+    v11_puppet_name_quality,
+    v12_drop_number_support,
 )

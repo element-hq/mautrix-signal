@@ -21,9 +21,9 @@ from .types import (
     DeviceInfo,
     ErrorMessage,
     GetIdentitiesResponse,
-    Group,
     GroupAccessControl,
     GroupID,
+    GroupMember,
     GroupV2,
     IncomingMessage,
     JoinGroupResponse,
@@ -206,8 +206,10 @@ class SignaldClient(SignaldRPCClient):
 
     @staticmethod
     def _recipient_to_args(
-        recipient: Address | GroupID, simple_name: bool = False
+        recipient: UUID | Address | GroupID, simple_name: bool = False
     ) -> dict[str, Any]:
+        if isinstance(recipient, UUID):
+            recipient = Address(uuid=recipient)
         if isinstance(recipient, Address):
             recipient = recipient.serialize()
             field_name = "address" if simple_name else "recipientAddress"
@@ -218,7 +220,7 @@ class SignaldClient(SignaldRPCClient):
     async def react(
         self,
         username: str,
-        recipient: Address | GroupID,
+        recipient: UUID | Address | GroupID,
         reaction: Reaction,
         req_id: UUID | None = None,
     ) -> None:
@@ -231,7 +233,7 @@ class SignaldClient(SignaldRPCClient):
         )
 
     async def remote_delete(
-        self, username: str, recipient: Address | GroupID, timestamp: int
+        self, username: str, recipient: UUID | Address | GroupID, timestamp: int
     ) -> None:
         await self.request_v1(
             "remote_delete",
@@ -243,7 +245,7 @@ class SignaldClient(SignaldRPCClient):
     async def send_raw(
         self,
         username: str,
-        recipient: Address | GroupID,
+        recipient: UUID | Address | GroupID,
         body: str,
         quote: Quote | None = None,
         attachments: list[Attachment] | None = None,
@@ -273,7 +275,7 @@ class SignaldClient(SignaldRPCClient):
     async def send(
         self,
         username: str,
-        recipient: Address | GroupID,
+        recipient: UUID | Address | GroupID,
         body: str,
         quote: Quote | None = None,
         attachments: list[Attachment] | None = None,
@@ -372,11 +374,9 @@ class SignaldClient(SignaldRPCClient):
         resp = await self.request_v1("list_contacts", account=username, **kwargs)
         return [Profile.deserialize(contact) for contact in resp["profiles"]]
 
-    async def list_groups(self, username: str) -> list[Group | GroupV2]:
+    async def list_groups(self, username: str) -> list[GroupV2]:
         resp = await self.request_v1("list_groups", account=username)
-        legacy = [Group.deserialize(group) for group in resp.get("legacyGroups", [])]
-        v2 = [GroupV2.deserialize(group) for group in resp.get("groups", [])]
-        return legacy + v2
+        return [GroupV2.deserialize(group) for group in resp.get("groups", [])]
 
     async def join_group(self, username: str, uri: str) -> JoinGroupResponse:
         resp = await self.request_v1("join_group", account=username, uri=uri)
@@ -385,27 +385,41 @@ class SignaldClient(SignaldRPCClient):
     async def leave_group(self, username: str, group_id: GroupID) -> None:
         await self.request_v1("leave_group", account=username, groupID=group_id)
 
-    async def ban_user(
-        self, username: str, group_id: GroupID, users: list[Address]
-    ) -> Group | GroupV2:
+    async def ban_user(self, username: str, group_id: GroupID, users: list[Address]) -> GroupV2:
         serialized_users = [user.serialize() for user in (users or [])]
         resp = await self.request_v1(
             "ban_user", account=username, group_id=group_id, users=serialized_users
         )
-        legacy = [Group.deserialize(group) for group in resp.get("legacyGroups", [])]
-        v2 = [GroupV2.deserialize(group) for group in resp.get("groups", [])]
-        return legacy + v2
+        return GroupV2.deserialize(resp)
 
-    async def unban_user(
-        self, username: str, group_id: GroupID, users: list[Address]
-    ) -> Group | GroupV2:
+    async def unban_user(self, username: str, group_id: GroupID, users: list[Address]) -> GroupV2:
         serialized_users = [user.serialize() for user in (users or [])]
         resp = await self.request_v1(
             "unban_user", account=username, group_id=group_id, users=serialized_users
         )
-        legacy = [Group.deserialize(group) for group in resp.get("legacyGroups", [])]
-        v2 = [GroupV2.deserialize(group) for group in resp.get("groups", [])]
-        return legacy + v2
+        return GroupV2.deserialize(resp)
+
+    async def approve_membership(
+        self, username: str, group_id: GroupID, members: list[Address]
+    ) -> GroupV2:
+        serialized_members = [member.serialize() for member in (members or [])]
+        resp = await self.request_v1(
+            "approve_membership", account=username, groupID=group_id, members=serialized_members
+        )
+        return GroupV2.deserialize(resp)
+
+    async def refuse_membership(
+        self, username: str, group_id: GroupID, members: list[Address], also_ban: bool = False
+    ) -> GroupV2:
+        serialized_members = [member.serialize() for member in (members or [])]
+        resp = await self.request_v1(
+            "refuse_membership",
+            account=username,
+            group_id=group_id,
+            members=serialized_members,
+            also_ban=also_ban,
+        )
+        return GroupV2.deserialize(resp)
 
     async def update_group(
         self,
@@ -418,7 +432,7 @@ class SignaldClient(SignaldRPCClient):
         remove_members: list[Address] | None = None,
         update_access_control: GroupAccessControl | None = None,
         update_role: GroupMember | None = None,
-    ) -> Group | GroupV2 | None:
+    ) -> GroupV2 | None:
         update_params = {
             key: value
             for key, value in {
@@ -438,10 +452,10 @@ class SignaldClient(SignaldRPCClient):
             if value is not None
         }
         resp = await self.request_v1("update_group", account=username, **update_params)
-        if "v1" in resp:
-            return Group.deserialize(resp["v1"])
-        elif "v2" in resp:
+        if "v2" in resp:
             return GroupV2.deserialize(resp["v2"])
+        elif "v1" in resp:
+            raise RuntimeError("v1 groups are no longer supported")
         else:
             return None
 
@@ -462,10 +476,10 @@ class SignaldClient(SignaldRPCClient):
     async def create_group(
         self,
         username: str,
+        title: str,
         avatar_path: str | None = None,
         member_role_administrator: bool = False,
         members: list[Address] | None = None,
-        title: str | None = None,
     ) -> GroupV2 | None:
         create_params = {
             "avatar": avatar_path,

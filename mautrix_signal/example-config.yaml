@@ -1,8 +1,8 @@
 # Homeserver details
 homeserver:
     # The address that this appservice can use to connect to the homeserver.
-    address: https://example.com
-    # The domain of the homeserver (for MXIDs, etc).
+    address: https://matrix.example.com
+    # The domain of the homeserver (also known as server_name, used for MXIDs, etc).
     domain: example.com
     # Whether or not to verify the SSL certificate of the homeserver.
     # Only applies if address starts with https://
@@ -41,7 +41,6 @@ appservice:
     max_body_size: 1
 
     # The full URI to the database. SQLite and Postgres are supported.
-    # However, SQLite support is extremely experimental and should not be used.
     # Format examples:
     #   SQLite:   sqlite:///filename.db
     #   Postgres: postgres://username:password@hostname/dbname
@@ -115,7 +114,7 @@ signal:
 # Bridge config
 bridge:
     # Localpart template of MXIDs for Signal users.
-    # {userid} is replaced with an identifier for the Signal user.
+    # {userid} is replaced with the UUID of the Signal user.
     username_template: "signal_{userid}"
     # Displayname template for Signal users.
     # {displayname} is replaced with the displayname of the Signal user, which is the first
@@ -308,6 +307,8 @@ bridge:
         # and double puppeting working to auto-accept invites. When this user is invited to a room
         # it will automatically be set as the relay user. May be overridden with `set-relay` or `unset-relay`
         relaybot: '@relaybot:example.com'
+        # Whether or not invites from non-logged-in users should be relayed
+        invite: true
 
     # Format for generating URLs from location messages for sending to Signal
     # Google Maps: 'https://www.google.com/maps/place/{lat},{long}'
