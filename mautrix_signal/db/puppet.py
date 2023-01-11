@@ -138,7 +138,7 @@ class Puppet:
 
     _select_base = (
         "SELECT uuid, number, name, name_quality, avatar_hash, avatar_url, name_set, avatar_set, "
-        "       is_registered, custom_mxid, access_token, next_batch, base_url "
+        "       is_registered, custom_mxid, access_token, next_batch, base_url, "
         "       first_activity_ts, last_activity_ts "
         "FROM puppet"
     )
