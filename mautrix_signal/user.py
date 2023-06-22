@@ -25,21 +25,23 @@ from mausignald.errors import AuthorizationFailedError, ProfileUnavailableError
 from mausignald.types import (
     Account,
     Address,
-    Group,
     GroupV2,
+    MessageResendSuccessEvent,
     Profile,
     WebsocketConnectionState,
     WebsocketConnectionStateChangeEvent,
 )
 from mautrix.appservice import AppService
 from mautrix.bridge import AutologinError, BaseUser, async_getter_lock
-from mautrix.types import RoomID, UserID
+from mautrix.types import EventType, RoomID, UserID
+from mautrix.util import background_task
 from mautrix.util.bridge_state import BridgeState, BridgeStateEvent
+from mautrix.util.message_send_checkpoint import MessageSendCheckpointStatus
 from mautrix.util.opt_prometheus import Gauge
 
 from . import portal as po, puppet as pu
 from .config import Config
-from .db import User as DBUser
+from .db import Message as DBMessage, User as DBUser
 
 if TYPE_CHECKING:
     from .__main__ import SignalBridge
@@ -71,8 +73,11 @@ class User(DBUser, BaseUser):
     _sync_lock: asyncio.Lock
     _notice_room_lock: asyncio.Lock
     _connected: bool
+    _state_id: str | None
     _websocket_connection_state: BridgeStateEvent | None
-    _latest_non_transient_disconnect_state: datetime | None
+    _latest_non_transient_bridge_state: datetime | None
+
+    challenge_token: str | None
 
     def __init__(
         self,
@@ -86,7 +91,10 @@ class User(DBUser, BaseUser):
         self._notice_room_lock = asyncio.Lock()
         self._sync_lock = asyncio.Lock()
         self._connected = False
+        self._state_id = self.username
         self._websocket_connection_state = None
+        self._latest_non_transient_bridge_state = None
+        self.challenge_token = None
         perms = self.config.get_permissions(mxid)
         self.relay_whitelisted, self.is_whitelisted, self.is_admin, self.permission_level = perms
 
@@ -132,7 +140,7 @@ class User(DBUser, BaseUser):
     async def fill_bridge_state(self, state: BridgeState) -> None:
         await super().fill_bridge_state(state)
         if not state.remote_id:
-            state.remote_id = self.username
+            state.remote_id = self._state_id
         if self.address:
             puppet = await self.get_puppet()
             state.remote_name = puppet.name or self.username
@@ -149,6 +157,7 @@ class User(DBUser, BaseUser):
 
     async def handle_auth_failure(self, e: Exception) -> None:
         if isinstance(e, AuthorizationFailedError):
+            self.username = None
             await self.push_bridge_state(BridgeStateEvent.BAD_CREDENTIALS, error=str(e))
 
     async def get_puppet(self) -> pu.Puppet | None:
@@ -163,12 +172,18 @@ class User(DBUser, BaseUser):
 
     async def on_signin(self, account: Account) -> None:
         self.username = account.account_id
+        self._state_id = account.account_id
         self.uuid = account.address.uuid
         self._add_to_cache()
         await self.update()
-        await self.bridge.signal.subscribe(self.username)
-        asyncio.create_task(self.sync())
-        self._track_metric(METRIC_LOGGED_IN, True)
+        self.log.debug(f"Subscribing to {self.username} / {self.uuid}")
+        if await self.bridge.signal.subscribe(self.username):
+            background_task.create(self.sync(is_startup=True))
+            self._track_metric(METRIC_LOGGED_IN, True)
+            self.log.debug("Successfully subscribed")
+        else:
+            self.log.warning("Failed to subscribe")
+            self.username = None
 
     def on_websocket_connection_state_change(
         self, evt: WebsocketConnectionStateChangeEvent
@@ -210,44 +225,70 @@ class User(DBUser, BaseUser):
             return
 
         now = datetime.now()
-        if bridge_state == BridgeStateEvent.TRANSIENT_DISCONNECT:
+        if bridge_state in (BridgeStateEvent.TRANSIENT_DISCONNECT, BridgeStateEvent.CONNECTING):
+            self.log.debug(
+                f"New bridge state {bridge_state} is likely transient. Waiting 15 seconds to send."
+            )
 
-            async def wait_report_transient_disconnect():
-                # Wait for 10 seconds (that should be enough for the bridge to get connected)
-                # before sending a TRANSIENT_DISCONNECT.
-                # self._latest_non_transient_disconnect_state will only be None if the bridge is
-                # still starting.
-                if self._latest_non_transient_disconnect_state is None:
-                    await sleep(15)
-                    if self._latest_non_transient_disconnect_state is None:
-                        asyncio.create_task(self.push_bridge_state(bridge_state))
+            async def wait_report_bridge_state():
+                # Wait for 15 seconds (that should be enough for the bridge to get connected)
+                # before sending a TRANSIENT_DISCONNECT/CONNECTING.
+                await sleep(15)
+                if (
+                    self._latest_non_transient_bridge_state
+                    and now > self._latest_non_transient_bridge_state
+                ):
+                    background_task.create(self.push_bridge_state(bridge_state))
 
-                # Wait for another minute. If the bridge stays in TRANSIENT_DISCONNECT for that
-                # long, something terrible has happened (signald failed to restart, the internet
-                # broke, etc.)
+                self._websocket_connection_state = bridge_state
+
+                # Wait for another minute. If the bridge stays in TRANSIENT_DISCONNECT/CONNECTING
+                # for that long, something terrible has happened (signald failed to restart, the
+                # internet broke, etc.)
                 await sleep(60)
                 if (
-                    self._latest_non_transient_disconnect_state
-                    and now > self._latest_non_transient_disconnect_state
+                    self._latest_non_transient_bridge_state
+                    and now > self._latest_non_transient_bridge_state
                 ):
-                    asyncio.create_task(
+                    background_task.create(
                         self.push_bridge_state(
                             BridgeStateEvent.UNKNOWN_ERROR,
                             message="Failed to restore connection to Signal",
                         )
                     )
+                    self._websocket_connection_state = BridgeStateEvent.UNKNOWN_ERROR
                 else:
                     self.log.info(
-                        "New state since last TRANSIENT_DISCONNECT push, "
+                        f"New state since last {bridge_state} push, "
                         "not transitioning to UNKNOWN_ERROR."
                     )
 
-            asyncio.create_task(wait_report_transient_disconnect())
+            background_task.create(wait_report_bridge_state())
+        elif self._websocket_connection_state == bridge_state:
+            self.log.info("Websocket state unchanged, not reporting new bridge state")
+            self._latest_non_transient_bridge_state = now
         else:
-            asyncio.create_task(self.push_bridge_state(bridge_state))
-            self._latest_non_transient_disconnect_state = now
+            if bridge_state == BridgeStateEvent.BAD_CREDENTIALS:
+                self.username = None
+            background_task.create(self.push_bridge_state(bridge_state))
+            self._latest_non_transient_bridge_state = now
+            self._websocket_connection_state = bridge_state
 
-        self._websocket_connection_state = bridge_state
+    async def on_message_resend_success(self, evt: MessageResendSuccessEvent):
+        # These messages mean we need to resend the message to that user.
+        my_uuid = self.address.uuid
+        self.log.debug(f"Successfully resent message {my_uuid}/{evt.timestamp}")
+        message = await DBMessage.find_by_sender_timestamp(my_uuid, evt.timestamp)
+        if not message:
+            self.log.warning("Couldn't find message that was resent")
+            return
+        self.log.debug(f"Successfully resent {message.mxid} in {message.mx_room}")
+        self.send_remote_checkpoint(
+            status=MessageSendCheckpointStatus.SUCCESS,
+            event_id=message.mxid,
+            room_id=message.mx_room,
+            event_type=EventType.ROOM_MESSAGE,
+        )
 
     async def _sync_puppet(self) -> None:
         puppet = await self.get_puppet()
@@ -264,9 +305,9 @@ class User(DBUser, BaseUser):
             except AutologinError as e:
                 self.log.warning(f"Failed to enable custom puppet: {e}")
 
-    async def sync(self) -> None:
+    async def sync(self, is_startup: bool = False) -> None:
         await self.sync_puppet()
-        await self.sync_contacts()
+        await self.sync_contacts(is_startup=is_startup)
         await self.sync_groups()
         self.log.debug("Sync complete")
 
@@ -277,10 +318,10 @@ class User(DBUser, BaseUser):
         except Exception:
             self.log.exception("Error while syncing own puppet")
 
-    async def sync_contacts(self) -> None:
+    async def sync_contacts(self, is_startup: bool = False) -> None:
         try:
             async with self._sync_lock:
-                await self._sync_contacts()
+                await self._sync_contacts(is_startup)
         except Exception as e:
             self.log.exception("Error while syncing contacts")
             await self.handle_auth_failure(e)
@@ -334,9 +375,28 @@ class User(DBUser, BaseUser):
         elif portal.mxid:
             await portal.update_matrix_room(self, group)
 
-    async def _sync_contacts(self) -> None:
+    async def _hacky_duplicate_contact_check(
+        self, contacts: list[Profile], is_startup: bool
+    ) -> None:
+        name_map: dict[str, list[Profile]] = {}
+        for contact in contacts:
+            if contact.contact_name:
+                name_map.setdefault(contact.contact_name, []).append(contact)
+        duplicates = {name: profiles for name, profiles in name_map.items() if len(profiles) > 1}
+        if duplicates:
+            self.log.warning(f"Found duplicate contact names, potential name mixup: {duplicates}")
+            if is_startup:
+                self.log.debug("Requesting contact sync to resolve potential name mixup")
+                await self.bridge.signal.request_sync(self.username)
+        else:
+            self.log.debug("No duplicate contact names found")
+
+    async def _sync_contacts(self, is_startup: bool) -> None:
         create_contact_portal = self.config["bridge.autocreate_contact_portal"]
-        for contact in await self.bridge.signal.list_contacts(self.username):
+        contacts = await self.bridge.signal.list_contacts(self.username)
+        if self.config["bridge.hacky_contact_name_mixup_detection"]:
+            await self._hacky_duplicate_contact_check(contacts, is_startup=is_startup)
+        for contact in contacts:
             try:
                 await self.sync_contact(contact, create_contact_portal)
             except Exception:

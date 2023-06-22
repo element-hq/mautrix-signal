@@ -64,6 +64,8 @@ class Config(BaseBridgeConfig):
         copy("bridge.sync_direct_chat_list")
         copy("bridge.double_puppet_server_map")
         copy("bridge.double_puppet_allow_discovery")
+        copy("bridge.create_group_on_invite")
+        copy("bridge.hacky_contact_name_mixup_detection")
         if self["bridge.login_shared_secret"]:
             base["bridge.login_shared_secret_map"] = {
                 base["homeserver.domain"]: self["bridge.login_shared_secret"]
@@ -71,7 +73,14 @@ class Config(BaseBridgeConfig):
         else:
             copy("bridge.login_shared_secret_map")
         copy("bridge.federate_rooms")
-        copy("bridge.private_chat_portal_meta")
+        if isinstance(self.get("bridge.private_chat_portal_meta", "default"), bool):
+            base["bridge.private_chat_portal_meta"] = (
+                "always" if self["bridge.private_chat_portal_meta"] else "default"
+            )
+        else:
+            copy("bridge.private_chat_portal_meta")
+            if base["bridge.private_chat_portal_meta"] not in ("default", "always", "never"):
+                base["bridge.private_chat_portal_meta"] = "default"
         copy("bridge.delivery_receipts")
         copy("bridge.delivery_error_reports")
         copy("bridge.message_status_events")
@@ -86,6 +95,7 @@ class Config(BaseBridgeConfig):
         if base["bridge.provisioning.shared_secret"] == "generate":
             base["bridge.provisioning.shared_secret"] = self._new_token()
         copy("bridge.provisioning.segment_key")
+        copy("bridge.provisioning.segment_user_id")
 
         copy("bridge.command_prefix")
 

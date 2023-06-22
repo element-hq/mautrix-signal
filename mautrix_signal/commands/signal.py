@@ -16,13 +16,11 @@
 from __future__ import annotations
 
 from typing import Awaitable
-import asyncio
 import base64
 import json
 
 from mausignald.errors import UnknownIdentityKey, UnregisteredUserError
 from mausignald.types import Address, GroupID, TrustLevel
-from mautrix.appservice import IntentAPI
 from mautrix.bridge import RejectMatrixInvite
 from mautrix.bridge.commands import SECTION_ADMIN, HelpSection, command_handler
 from mautrix.types import (
@@ -33,11 +31,13 @@ from mautrix.types import (
     PowerLevelStateEventContent,
     RoomID,
 )
+from mautrix.util import background_task
 
 from .. import portal as po, puppet as pu
 from ..util import normalize_number, user_has_power_level
 from .auth import make_qr
 from .typehint import CommandEvent
+from .util import get_initial_state
 
 try:
     import PIL as _
@@ -257,11 +257,21 @@ async def mark_trusted(evt: CommandEvent) -> EventID:
     needs_admin=False,
     needs_auth=True,
     help_section=SECTION_SIGNAL,
-    help_text="Sync data from Signal",
+    help_text="Sync data from signald",
 )
 async def sync(evt: CommandEvent) -> None:
     await evt.sender.sync()
     await evt.reply("Sync complete")
+
+
+@command_handler(
+    needs_admin=False,
+    needs_auth=True,
+    help_section=SECTION_SIGNAL,
+    help_text="Request your phone to re-send data like contacts and group info",
+)
+async def request_sync(evt: CommandEvent) -> None:
+    await evt.bridge.signal.request_sync(evt.sender.username)
 
 
 @command_handler(
@@ -358,7 +368,6 @@ async def create(evt: CommandEvent) -> EventID:
     await warn_missing_power(levels, evt)
 
     await portal.create_signal_group(evt.sender, levels, join_rule)
-    await evt.reply(f"Signal chat created. ID: {portal.chat_id}")
 
 
 @command_handler(
@@ -501,6 +510,34 @@ async def confirm_bridge(evt: CommandEvent) -> EventID | None:
         )
 
 
+@command_handler(
+    needs_auth=True,
+    management_only=False,
+    help_section=SECTION_SIGNAL,
+    help_text="Submit a captcha challenge for the last occuring token",
+    help_args="<captcha token>",
+)
+async def submit_challenge(evt: CommandEvent) -> None:
+    if len(evt.args) == 0:
+        await evt.reply("**Usage:** `$cmdprefix+sp submit-challenge <captcha token>`")
+        return
+    challenge_token = evt.sender.challenge_token
+    captcha_token = evt.args[0]
+    if not challenge_token:
+        return await evt.reply(
+            "No open challenge found. If the bridge was restarted, try"
+            "triggering another ProofRequiredError"
+        )
+    evt.log.debug(f"Submitting challenge for token {challenge_token}")
+    try:
+        await evt.bridge.signal.submit_challenge(
+            evt.sender.username, captcha_token=evt.args[0], challenge=challenge_token
+        )
+    except Exception as e:
+        return await evt.reply(f"Failed to submit captcha challenge: {e}")
+    return await evt.reply("Captcha challenge submitted successfully")
+
+
 async def _locked_confirm_bridge(
     evt: CommandEvent, portal: po.Portal, room_id: RoomID, is_logged_in: bool
 ) -> EventID | None:
@@ -528,54 +565,16 @@ async def _locked_confirm_bridge(
         levels,
         portal.encrypted,
         portal.photo_id,
+        join_rule,
     ) = await get_initial_state(evt.az.intent, evt.room_id)
     await portal.save()
     await portal.update_bridge_info()
 
-    asyncio.create_task(portal.update_matrix_room(evt.sender, group))
+    background_task.create(portal.update_matrix_room(evt.sender, group))
 
     await warn_missing_power(levels, evt)
 
     return await evt.reply("Bridging complete. Portal synchronization should begin momentarily.")
-
-
-async def get_initial_state(
-    intent: IntentAPI, room_id: RoomID
-) -> tuple[
-    str | None,
-    str | None,
-    PowerLevelStateEventContent | None,
-    bool,
-    ContentURI | None,
-    JoinRule | None,
-]:
-    state = await intent.get_state(room_id)
-    title: str | None = None
-    about: str | None = None
-    levels: PowerLevelStateEventContent | None = None
-    encrypted: bool = False
-    avatar_url: ContentURI | None = None
-    join_rule: JoinRule | None = None
-    for event in state:
-        try:
-            if event.type == EventType.ROOM_NAME:
-                title = event.content.name
-            elif event.type == EventType.ROOM_TOPIC:
-                about = event.content.topic
-            elif event.type == EventType.ROOM_POWER_LEVELS:
-                levels = event.content
-            elif event.type == EventType.ROOM_CANONICAL_ALIAS:
-                title = title or event.content.canonical_alias
-            elif event.type == EventType.ROOM_ENCRYPTION:
-                encrypted = True
-            elif event.type == EventType.ROOM_AVATAR:
-                avatar_url = event.content.url
-            elif event.type == EventType.ROOM_JOIN_RULES:
-                join_rule = event.content.join_rule
-        except KeyError:
-            # Some state event probably has empty content
-            pass
-    return title, about, levels, encrypted, avatar_url, join_rule
 
 
 async def warn_missing_power(levels: PowerLevelStateEventContent, evt: CommandEvent) -> None:

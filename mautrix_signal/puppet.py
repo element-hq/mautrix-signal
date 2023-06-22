@@ -36,6 +36,7 @@ from mautrix.types import (
     SyncToken,
     UserID,
 )
+from mautrix.util import background_task
 from mautrix.util.simple_template import SimpleTemplate
 
 from . import portal as p, signal, user as u
@@ -58,6 +59,7 @@ class Puppet(DBPuppet, BasePuppet):
     hs_domain: str
     mxid_template: SimpleTemplate[str]
 
+    bridge: SignalBridge
     config: Config
     signal: signal.SignalHandler
 
@@ -77,6 +79,7 @@ class Puppet(DBPuppet, BasePuppet):
         avatar_hash: str | None = None,
         name_set: bool = False,
         avatar_set: bool = False,
+        contact_info_set: bool = False,
         is_registered: bool = False,
         custom_mxid: UserID | None = None,
         access_token: str | None = None,
@@ -96,6 +99,7 @@ class Puppet(DBPuppet, BasePuppet):
             avatar_hash=avatar_hash,
             name_set=name_set,
             avatar_set=avatar_set,
+            contact_info_set=contact_info_set,
             is_registered=is_registered,
             custom_mxid=custom_mxid,
             access_token=access_token,
@@ -115,6 +119,7 @@ class Puppet(DBPuppet, BasePuppet):
 
     @classmethod
     def init_cls(cls, bridge: "SignalBridge") -> AsyncIterable[Awaitable[None]]:
+        cls.bridge = bridge
         cls.config = bridge.config
         cls.loop = bridge.loop
         cls.signal = bridge.signal
@@ -194,11 +199,16 @@ class Puppet(DBPuppet, BasePuppet):
     async def update_info(self, info: Profile | Address, source: u.User) -> None:
         update = False
         address = info.address if isinstance(info, Profile) else info
+        number_updated = False
         if address.number and address.number != self.number:
             await self.handle_number_receive(address.number)
             update = True
+            number_updated = True
+
         self.log.debug("Updating info with %s (source: %s)", info, source.mxid)
         async with self._update_info_lock:
+            update = await self._update_contact_info(force=number_updated) or update
+
             if isinstance(info, Profile) or self.name is None:
                 update = await self._update_name(info) or update
             if isinstance(info, Profile):
@@ -208,7 +218,32 @@ class Puppet(DBPuppet, BasePuppet):
                 update = await self._update_avatar(f"contact-{self.number}") or update
             if update:
                 await self.update()
-                asyncio.create_task(self._try_update_portal_meta())
+                background_task.create(self._try_update_portal_meta())
+
+    async def _update_contact_info(self, force: bool = False) -> bool:
+        if not self.bridge.homeserver_software.is_hungry:
+            return False
+
+        if self.contact_info_set and not force:
+            return False
+
+        try:
+            identifiers = [f"signal:{self.uuid}"]
+            if self.number:
+                identifiers.append(f"tel:{self.number}")
+            await self.default_mxid_intent.beeper_update_profile(
+                {
+                    "com.beeper.bridge.identifiers": identifiers,
+                    "com.beeper.bridge.remote_id": str(self.uuid),
+                    "com.beeper.bridge.service": "signal",
+                    "com.beeper.bridge.network": "signal",
+                }
+            )
+            self.contact_info_set = True
+        except Exception:
+            self.log.exception("Error updating contact info")
+            self.contact_info_set = False
+        return True
 
     @staticmethod
     def fmt_phone(number: str) -> str:

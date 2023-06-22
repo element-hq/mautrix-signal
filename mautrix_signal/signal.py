@@ -26,6 +26,7 @@ from mausignald.types import (
     ErrorMessage,
     IncomingMessage,
     MessageData,
+    MessageResendSuccessEvent,
     OfferMessageType,
     OwnReadReceipt,
     ReceiptMessage,
@@ -35,12 +36,15 @@ from mausignald.types import (
     TypingMessage,
     WebsocketConnectionStateChangeEvent,
 )
-from mautrix.types import EventID, Format, MessageType, TextMessageEventContent
+from mautrix.types import EventID, EventType, Format, MessageType, TextMessageEventContent
+from mautrix.util import background_task
 from mautrix.util.logging import TraceLogger
+from mautrix.util.message_send_checkpoint import MessageSendCheckpointStatus
 from mautrix.util.opt_prometheus import Counter
 
 from . import portal as po, puppet as pu, user as u
 from .db import Message as DBMessage
+from .web.segment_analytics import track
 
 if TYPE_CHECKING:
     from .__main__ import SignalBridge
@@ -72,6 +76,7 @@ class SignalHandler(SignaldClient):
         self.add_event_handler(
             WebsocketConnectionStateChangeEvent, self.on_websocket_connection_state_change
         )
+        self.add_event_handler(MessageResendSuccessEvent, self.on_message_resend_success)
 
     async def on_message(self, evt: IncomingMessage) -> None:
         sender = await pu.Puppet.get_by_address(evt.source, resolve_via=evt.account)
@@ -95,6 +100,8 @@ class SignalHandler(SignaldClient):
         if evt.call_message:
             await self.handle_call_message(user, sender, evt)
             counter_type = "call"
+        if evt.decryption_error_message:
+            await self.handle_decryption_error(user, sender, evt)
         if evt.sync_message:
             if evt.sync_message.read_messages:
                 future = self.handle_own_receipts(sender, evt.sync_message.read_messages)
@@ -143,6 +150,8 @@ class SignalHandler(SignaldClient):
                 portal = await po.Portal.get_by_chat_id(sender.uuid, receiver=user.username)
                 if portal and portal.mxid:
                     await sender.intent_for(portal).redact(portal.mxid, event_id)
+                    error = {"sender": str(sender.uuid), "timestamp": str(evt.timestamp)}
+                    track(user, "$signal_inbound_error_redacted", error)
 
     async def on_error_message(self, err: ErrorMessage) -> None:
         self.log.warning(
@@ -183,6 +192,12 @@ class SignalHandler(SignaldClient):
                     intent=sender.intent_for(portal),
                     content=TextMessageEventContent(body=err_text, msgtype=MessageType.NOTICE),
                 )
+                error = {
+                    "message": err_text,
+                    "sender": str(sender.uuid),
+                    "timestamp": str(err.data.timestamp),
+                }
+                track(user, "$signal_inbound_error_displayed", error)
             finally:
                 fut.set_result(event_id)
 
@@ -197,6 +212,11 @@ class SignalHandler(SignaldClient):
     ) -> None:
         user = await u.User.get_by_username(evt.account)
         user.on_websocket_connection_state_change(evt)
+
+    @staticmethod
+    async def on_message_resend_success(evt: MessageResendSuccessEvent):
+        user = await u.User.get_by_username(evt.account)
+        await user.on_message_resend_success(evt)
 
     async def handle_message(
         self,
@@ -219,12 +239,10 @@ class SignalHandler(SignaldClient):
         addr_override: Address | None = None,
     ) -> None:
         if msg.profile_key_update:
-            asyncio.create_task(user.sync_contact(sender.address, use_cache=False))
+            background_task.create(user.sync_contact(sender.address, use_cache=False))
             return
         if msg.group_v2:
             portal = await po.Portal.get_by_chat_id(msg.group_v2.id, create=True)
-        elif msg.group:
-            portal = await po.Portal.get_by_chat_id(msg.group.group_id, create=True)
         else:
             if addr_override and not addr_override.uuid:
                 target = await pu.Puppet.get_by_address(addr_override, resolve_via=user.username)
@@ -259,9 +277,7 @@ class SignalHandler(SignaldClient):
                     " probably not bridgeable as there's no portal yet"
                 )
                 return
-            await portal.create_matrix_room(
-                user, msg.group_v2 or msg.group or addr_override or sender.address
-            )
+            await portal.create_matrix_room(user, msg.group_v2 or addr_override or sender.address)
             if not portal.mxid:
                 user.log.warning(
                     f"Failed to create room for incoming message {msg.timestamp}, dropping message"
@@ -289,8 +305,6 @@ class SignalHandler(SignaldClient):
             await portal.handle_signal_reaction(sender, msg.reaction, msg.timestamp)
         if msg.is_message:
             await portal.handle_signal_message(user, sender, msg)
-        if msg.group and msg.group.type == "UPDATE":
-            await portal.update_info(user, msg.group)
         if msg.remote_delete:
             await portal.handle_signal_delete(sender, msg.remote_delete.target_sent_timestamp)
 
@@ -363,7 +377,7 @@ class SignalHandler(SignaldClient):
             return
         is_typing = typing.action == TypingAction.STARTED
         await sender.intent_for(portal).set_typing(
-            portal.mxid, is_typing, ignore_cache=True, timeout=SIGNAL_TYPING_TIMEOUT
+            portal.mxid, timeout=SIGNAL_TYPING_TIMEOUT if is_typing else 0
         )
 
     @staticmethod
@@ -374,6 +388,43 @@ class SignalHandler(SignaldClient):
         for message in messages:
             portal = await po.Portal.get_by_mxid(message.mx_room)
             await sender.intent_for(portal).mark_read(portal.mxid, message.mxid)
+
+    async def handle_decryption_error(
+        self, user: u.User, sender: pu.Puppet, msg: IncomingMessage
+    ) -> None:
+        # These messages mean that a message resend was requested. Signald will handle it, but we
+        # need to update the checkpoints.
+        assert msg.decryption_error_message
+        my_uuid = user.address.uuid
+        timestamp = msg.decryption_error_message.timestamp
+        self.log.debug(f"Got decryption error message for {my_uuid}/{timestamp}")
+        message = await DBMessage.find_by_sender_timestamp(my_uuid, timestamp)
+        if not message:
+            self.log.warning("Couldn't find message to referenced in decryption error")
+            return
+        self.log.debug(
+            f"Got decryption error message for {message.mxid} from {sender.uuid} "
+            f"in {message.mx_room}"
+        )
+        portal = await po.Portal.get_by_mxid(message.mx_room)
+        if not portal or not portal.mxid:
+            self.log.warning("Couldn't find portal for message referenced in decryption error")
+            return
+
+        evt = await portal.main_intent.get_event(message.mx_room, message.mxid)
+        if evt.content.get("fi.mau.double_puppet_source"):
+            self.log.debug(
+                "Message requested in decryption error is double-puppeted, not sending checkpoint"
+            )
+            return
+
+        user.send_remote_checkpoint(
+            status=MessageSendCheckpointStatus.DELIVERY_FAILED,
+            event_id=message.mxid,
+            room_id=message.mx_room,
+            event_type=EventType.ROOM_MESSAGE,
+            error=f"{sender.uuid} sent a decryption error message for this message",
+        )
 
     async def start(self) -> None:
         await self.connect()
@@ -387,7 +438,9 @@ class SignalHandler(SignaldClient):
                     self.log.info(
                         f"Successfully subscribed {user.username}, running sync in background"
                     )
-                    asyncio.create_task(user.sync())
+                    background_task.create(user.sync())
+                else:
+                    user.username = None
             except Exception as ex:
                 # Don't hold up the whole bridge over this.
                 self.log.warning(f"Failed to subscribe to {user.username}: {ex}")

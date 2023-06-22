@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 
+from mautrix.util import background_task
 from mautrix.util.logging import TraceLogger
 from mautrix.util.opt_prometheus import Counter, Gauge
 
@@ -103,7 +104,7 @@ class SignaldRPCClient:
         read_loop = asyncio.create_task(self._try_read_loop())
         self.is_connected = True
         CONNECTED_GAUGE.set(1)
-        asyncio.create_task(self._run_rpc_handler(CONNECT_EVENT, {}))
+        background_task.create(self._run_rpc_handler(CONNECT_EVENT, {}))
         self._connect_future.set_result(True)
 
         await read_loop
@@ -186,7 +187,7 @@ class SignaldRPCClient:
 
         req_id = req.get("id")
         if req_id is None:
-            asyncio.create_task(self._run_rpc_handler(req_type, req))
+            background_task.create(self._run_rpc_handler(req_type, req))
         else:
             self._run_response_handlers(UUID(req_id), req_type, req)
 

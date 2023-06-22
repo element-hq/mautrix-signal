@@ -46,14 +46,18 @@ class ProvisioningAPI:
     bridge: "SignalBridge"
 
     def __init__(
-        self, bridge: "SignalBridge", shared_secret: str, segment_key: str | None
+        self,
+        bridge: "SignalBridge",
+        shared_secret: str,
+        segment_key: str | None,
+        segment_user_id: str | None,
     ) -> None:
         self.bridge = bridge
         self.app = web.Application()
         self.shared_secret = shared_secret
 
         if segment_key:
-            init_segment(segment_key)
+            init_segment(segment_key, segment_user_id)
 
         # Whoami
         self.app.router.add_get("/v1/api/whoami", self.status)
@@ -81,6 +85,7 @@ class ProvisioningAPI:
 
         # Start new chat API
         self.app.router.add_get("/v2/contacts", self.list_contacts)
+        self.app.router.add_get("/v2/sync", self.request_sync)
         self.app.router.add_get("/v2/resolve_identifier/{number}", self.resolve_identifier)
         self.app.router.add_post("/v2/pm/{number}", self.start_pm)
 
@@ -355,9 +360,12 @@ class ProvisioningAPI:
     # region Logout
 
     async def logout(self, request: web.Request) -> web.Response:
-        user = await self.check_token_and_logged_in(request)
-        await user.logout()
-        return web.json_response({}, headers=self._acao_headers)
+        try:
+            user = await self.check_token_and_logged_in(request)
+            await user.logout()
+            return web.json_response({}, headers=self._acao_headers)
+        except web.HTTPNotFound:
+            return web.json_response({"error": "You're not logged in"}, headers=self._acao_headers)
 
     # endregion
 
@@ -387,6 +395,11 @@ class ProvisioningAPI:
             },
             headers=self._acao_headers,
         )
+
+    async def request_sync(self, request: web.Request) -> web.Response:
+        user = await self.check_token_and_logged_in(request)
+        await self.bridge.signal.request_sync(user.username)
+        return web.json_response({}, headers=self._acao_headers)
 
     async def _resolve_identifier(self, number: str, user: u.User) -> pu.Puppet:
         try:

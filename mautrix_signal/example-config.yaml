@@ -179,6 +179,23 @@ bridge:
         # Enable key sharing? If enabled, key requests for rooms where users are in will be fulfilled.
         # You must use a client that supports requesting keys from other users to use this feature.
         allow_key_sharing: false
+        # Options for deleting megolm sessions from the bridge.
+        delete_keys:
+            # Beeper-specific: delete outbound sessions when hungryserv confirms
+            # that the user has uploaded the key to key backup.
+            delete_outbound_on_ack: false
+            # Don't store outbound sessions in the inbound table.
+            dont_store_outbound: false
+            # Ratchet megolm sessions forward after decrypting messages.
+            ratchet_on_decrypt: false
+            # Delete fully used keys (index >= max_messages) after decrypting messages.
+            delete_fully_used_on_decrypt: false
+            # Delete previous megolm sessions from same device when receiving a new one.
+            delete_prev_on_new_session: false
+            # Delete megolm sessions received from a device when the device is deleted.
+            delete_on_device_delete: false
+            # Periodically delete megolm sessions when 2x max_age has passed since receiving the session.
+            periodically_delete_expired: false
         # What level of device verification should be required from users?
         #
         # Valid levels:
@@ -214,9 +231,11 @@ bridge:
             # default.
             messages: 100
 
-    # Whether or not to explicitly set the avatar and room name for private
-    # chat portal rooms. This will be implicitly enabled if encryption.default is true.
-    private_chat_portal_meta: false
+    # Whether to explicitly set the avatar and room name for private chat portal rooms.
+    # If set to `default`, this will be enabled in encrypted rooms and disabled in unencrypted rooms.
+    # If set to `always`, all DM rooms will have explicit names and avatars set.
+    # If set to `never`, DM rooms will never have names and avatars set.
+    private_chat_portal_meta: default
     # Whether or not the bridge should send a read receipt from the bridge bot when a message has
     # been sent to Signal. This let's you check manually whether the bridge is receiving your
     # messages.
@@ -234,6 +253,10 @@ bridge:
     periodic_sync: 0
     # Should leaving the room on Matrix make the user leave on Signal?
     bridge_matrix_leave: true
+    # Should the bridge auto-create a group chat on Signal when a ghost is invited to a room?
+    # Requires the user to have sufficient power level and double puppeting enabled.
+    create_group_on_invite: true
+    hacky_contact_name_mixup_detection: false
 
     # Provisioning API part of the web server for automated portal creation and fetching information.
     # Used by things like mautrix-manager (https://github.com/tulir/mautrix-manager).
@@ -250,6 +273,8 @@ bridge:
         # Currently the only events are login start, QR code scan, and login
         # success/failure.
         segment_key: null
+        # Optional user_id to use when sending Segment events. If null, defaults to using mxID.
+        segment_user_id: null
 
     # The prefix for commands. Only required in non-management rooms.
     command_prefix: "!signal"

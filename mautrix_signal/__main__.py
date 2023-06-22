@@ -47,6 +47,8 @@ METRIC_BLOCKING = Gauge("bridge_blocked", "Is the bridge currently blocking mess
 class SignalBridge(Bridge):
     module = "mautrix_signal"
     name = "mautrix-signal"
+    beeper_service_name = "signal"
+    beeper_network_name = "signal"
     command = "python -m mautrix-signal"
     description = "A Matrix-Signal puppeting bridge."
     repo_url = "https://github.com/mautrix/signal"
@@ -73,7 +75,9 @@ class SignalBridge(Bridge):
         self.signal = SignalHandler(self)
         super().prepare_bridge()
         cfg = self.config["bridge.provisioning"]
-        self.provisioning_api = ProvisioningAPI(self, cfg["shared_secret"], cfg["segment_key"])
+        self.provisioning_api = ProvisioningAPI(
+            self, cfg["shared_secret"], cfg["segment_key"], cfg["segment_user_id"]
+        )
         self.az.app.add_subapp(cfg["prefix"], self.provisioning_api.app)
 
     async def start(self) -> None:
@@ -88,9 +92,11 @@ class SignalBridge(Bridge):
         self.periodic_sync_task = asyncio.create_task(self._periodic_sync_loop())
         self.periodic_active_metrics_task = asyncio.create_task(self._loop_active_puppet_metric())
 
-    @staticmethod
-    async def _actual_periodic_sync_loop(log: logging.Logger, interval: int) -> None:
+    async def _actual_periodic_sync_loop(self, log: logging.Logger, interval: int) -> None:
+        n = 0
+        hacky_daily_resync = self.config["bridge.hacky_contact_name_mixup_detection"]
         while True:
+            n += 1
             try:
                 await asyncio.sleep(interval)
             except asyncio.CancelledError:
@@ -100,7 +106,7 @@ class SignalBridge(Bridge):
                 # Add some randomness to the sync to avoid a thundering herd
                 await asyncio.sleep(uniform(0, SYNC_JITTER))
                 try:
-                    await user.sync()
+                    await user.sync(is_startup=hacky_daily_resync and n % 24 == 23)
                 except asyncio.CancelledError:
                     return
                 except Exception:
@@ -113,7 +119,10 @@ class SignalBridge(Bridge):
             log.debug("Periodic sync is not enabled")
             return
         log.debug("Starting periodic sync loop")
-        await self._actual_periodic_sync_loop(log, interval)
+        try:
+            await self._actual_periodic_sync_loop(log, interval)
+        except Exception:
+            log.fatal("Error in periodic resync", exc_info=True)
         log.debug("Periodic sync stopped")
 
     def prepare_stop(self) -> None:

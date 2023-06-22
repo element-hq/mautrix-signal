@@ -12,7 +12,7 @@ import asyncio
 from mautrix.util.logging import TraceLogger
 from mautrix.util.opt_prometheus import Counter, Gauge
 
-from .errors import AuthorizationFailedError, RPCError, UnexpectedResponse
+from .errors import AuthorizationFailedError, NoSuchAccountError, RPCError, UnexpectedResponse
 from .rpc import CONNECT_EVENT, DISCONNECT_EVENT, SignaldRPCClient
 from .types import (
     Account,
@@ -30,6 +30,7 @@ from .types import (
     LinkPreview,
     LinkSession,
     Mention,
+    MessageResendSuccessEvent,
     Profile,
     ProofRequiredType,
     Quote,
@@ -76,6 +77,7 @@ class SignaldClient(SignaldRPCClient):
         self.add_rpc_handler("WebSocketConnectionState", self._websocket_connection_state_change)
         self.add_rpc_handler("version", self._log_version)
         self.add_rpc_handler("StorageChange", self._parse_storage_change)
+        self.add_rpc_handler("MessageResendSuccess", self._parse_message_resend_request)
         self.add_rpc_handler(CONNECT_EVENT, self._resubscribe)
         self.add_rpc_handler(DISCONNECT_EVENT, self._on_disconnect)
 
@@ -106,6 +108,11 @@ class SignaldClient(SignaldRPCClient):
         if data["type"] != "StorageChange":
             return
         await self._run_event_handler(StorageChange.deserialize(data))
+
+    async def _parse_message_resend_request(self, data: dict[str, Any]) -> None:
+        if data["type"] != "MesaageResendSuccess":
+            return
+        await self._run_event_handler(MessageResendSuccessEvent.deserialize(data))
 
     async def _parse_message(self, data: dict[str, Any]) -> None:
         event_type = data["type"]
@@ -139,7 +146,7 @@ class SignaldClient(SignaldRPCClient):
         except RPCError as e:
             self.log.warn("Failed to subscribe to %s: %s", username, e)
             state = WebsocketConnectionState.DISCONNECTED
-            if isinstance(e, AuthorizationFailedError):
+            if isinstance(e, (AuthorizationFailedError, NoSuchAccountError)):
                 state = WebsocketConnectionState.AUTHENTICATION_FAILED
             evt = WebsocketConnectionStateChangeEvent(state=state, account=username)
             await self._run_event_handler(evt)
@@ -369,6 +376,23 @@ class SignaldClient(SignaldRPCClient):
     async def remove_linked_device(self, username: str, device_id: int) -> None:
         await self.request_v1("remove_linked_device", account=username, deviceId=device_id)
 
+    async def request_sync(
+        self,
+        username: str,
+        blocked: bool = True,
+        configuration: bool = True,
+        contacts: bool = True,
+        groups: bool = True,
+    ) -> None:
+        await self.request_v1(
+            "request_sync",
+            account=username,
+            blocked=blocked,
+            configuration=configuration,
+            contacts=contacts,
+            groups=groups,
+        )
+
     async def list_contacts(self, username: str, use_cache: bool = False) -> list[Profile]:
         kwargs = {"async": use_cache}
         resp = await self.request_v1("list_contacts", account=username, **kwargs)
@@ -557,3 +581,10 @@ class SignaldClient(SignaldRPCClient):
             "resolve_address", partial=Address(number=number).serialize(), account=username
         )
         return Address.deserialize(resp).uuid
+
+    async def submit_challenge(
+        self, username: str, captcha_token: str | None, challenge: str | None
+    ) -> None:
+        await self.request_v1(
+            "submit_challenge", account=username, captcha_token=captcha_token, challenge=challenge
+        )

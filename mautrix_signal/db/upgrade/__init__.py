@@ -18,4 +18,5 @@ from . import (  # isort:skip
     v11_puppet_name_quality,
     v11_puppet_name_quality,
     v12_drop_number_support,
+    v13_add_contact_info_to_puppet,
 )
