@@ -329,9 +329,9 @@ func main() {
 	}
 	br.Bridge = bridge.Bridge{
 		Name:              "mautrix-signal",
-		URL:               "https://github.com/mautrix/signal",
+		URL:               "https://github.com/element-hq/mautrix-signal",
 		Description:       "A Matrix-Signal puppeting bridge.",
-		Version:           "0.4.99",
+		Version:           "0.4.99-mod-1",
 		ProtocolName:      "Signal",
 		BeeperServiceName: "signal",
 		BeeperNetworkName: "signal",
