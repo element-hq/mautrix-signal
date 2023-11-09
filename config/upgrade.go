@@ -141,6 +141,14 @@ func DoUpgrade(helper *up.Helper) {
 	} else {
 		helper.Copy(up.Map, "bridge", "relay", "message_formats")
 	}
+
+	helper.Copy(up.Int, "bridge", "limits", "max_puppet_limit")
+	helper.Copy(up.Int, "bridge", "limits", "min_puppet_activity_days")
+	helper.Copy(up.Int|up.Null, "bridge", "limits", "puppet_inactivity_days")
+	helper.Copy(up.Bool, "bridge", "limits", "block_on_limit_reached")
+	helper.Copy(up.Str, "bridge", "limits", "block_begins_notification")
+	helper.Copy(up.Str, "bridge", "limits", "block_ends_notification")
+	helper.Copy(up.Int, "bridge", "limits", "block_notification_interval_seconds")
 }
 
 var SpacedBlocks = [][]string{
@@ -159,5 +167,6 @@ var SpacedBlocks = [][]string{
 	{"bridge", "encryption"},
 	{"bridge", "provisioning"},
 	{"bridge", "permissions"},
+	{"bridge", "limits"},
 	{"logging"},
 }

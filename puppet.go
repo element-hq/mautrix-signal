@@ -181,6 +181,11 @@ func (br *SignalBridge) ParsePuppetMXID(mxid id.UserID) (uuid.UUID, bool) {
 	return uuid.Nil, false
 }
 
+type PuppetActivity struct {
+	currentUserCount uint
+	isBlocked        bool
+}
+
 type Puppet struct {
 	*database.Puppet
 

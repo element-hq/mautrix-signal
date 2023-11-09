@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -29,6 +30,7 @@ import (
 	"go.mau.fi/util/dbutil"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/bridge"
+	"maunium.net/go/mautrix/bridge/bridgeconfig"
 	"maunium.net/go/mautrix/bridge/commands"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/format"
@@ -41,6 +43,8 @@ import (
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow/store"
 )
+
+const activeUserMetricsIntervalSec = 60
 
 //go:embed example-config.yaml
 var ExampleConfig string
@@ -62,6 +66,11 @@ type SignalBridge struct {
 	MeowStore *store.StoreContainer
 
 	provisioning *ProvisioningAPI
+
+	puppetActivity             *PuppetActivity
+	activePuppetMetricLoopDone chan bool
+	activePuppetMetricRequest  chan bool
+	lastBlockingNotification   int64
 
 	usersByMXID     map[id.UserID]*User
 	usersBySignalID map[uuid.UUID]*User
@@ -114,7 +123,7 @@ func (br *SignalBridge) Init() {
 		Bridge: br,
 	}
 
-	br.Metrics = NewMetricsHandler(br.Config.Metrics.Listen, br.Log.Sub("Metrics"), br.DB)
+	br.Metrics = NewMetricsHandler(br.Config.Metrics.Listen, br.Log.Sub("Metrics"), br.DB, br.puppetActivity)
 	br.MatrixHandler.TrackEventDuration = br.Metrics.TrackMatrixEvent
 
 	signalFormatParams = &signalfmt.FormatParams{
@@ -188,6 +197,8 @@ func (br *SignalBridge) Start() {
 		br.provisioning.Init()
 	}
 	go br.StartUsers()
+	br.updateActivePuppetMetricNow()
+	go br.loopActivePuppetMetric()
 	if br.Config.Metrics.Enabled {
 		go br.Metrics.Start()
 	}
@@ -200,6 +211,7 @@ func (br *SignalBridge) Stop() {
 		br.Log.Debugln("Disconnecting", user.MXID)
 		user.Disconnect()
 	}
+	close(br.activePuppetMetricLoopDone)
 }
 
 func (br *SignalBridge) GetIPortal(mxid id.RoomID) bridge.Portal {
@@ -314,6 +326,125 @@ func (br *SignalBridge) createPrivatePortalFromInvite(ctx context.Context, roomI
 	log.Info().Msg("Created private chat portal after invite")
 }
 
+func (br *SignalBridge) UpdateActivePuppetMetric() {
+	defer func() {
+		if recover() != nil {
+			br.ZLog.Warn().Msg("Attempted to update active puppet metrics after bridge has stopped")
+		}
+	}()
+	br.activePuppetMetricRequest <- true
+}
+
+func (br *SignalBridge) updateActivePuppetMetricNow() {
+	br.ZLog.Debug().Msg("Updating active puppet count")
+	br.updateActivePuppetMetric(br.ZLog)
+}
+
+func (br *SignalBridge) updateActivePuppetMetric(log *zerolog.Logger) {
+	activeUsers, err := br.DB.Puppet.GetRecentlyActiveCount(
+		context.TODO(),
+		br.Config.Bridge.Limits.MinPuppetActivityDays,
+		br.Config.Bridge.Limits.PuppetInactivityDays,
+	)
+	if err != nil {
+		log.Warn().Msg("Failed to scan number of active puppets")
+		return
+	}
+
+	if br.Config.Bridge.Limits.BlockOnLimitReached {
+		blocked := br.Config.Bridge.Limits.MaxPuppetLimit < activeUsers
+		if br.puppetActivity.isBlocked != blocked {
+			br.puppetActivity.isBlocked = blocked
+			br.notifyBridgeBlocked(blocked)
+		}
+	}
+	log.Debug().Msgf("Current active puppet count is %d", activeUsers)
+	br.puppetActivity.currentUserCount = activeUsers
+
+	if br.Config.Metrics.Enabled {
+		br.Metrics.updatePuppetActivity()
+	}
+}
+
+func (br *SignalBridge) loopActivePuppetMetric() {
+	log := br.ZLog.With().Str("module", "mau.active_puppet_metric").Logger()
+
+	ticker := time.Tick(activeUserMetricsIntervalSec * time.Second)
+	for {
+		select {
+		case <-ticker:
+			log.Info().Msg("Executing periodic active puppet metric check")
+			br.updateActivePuppetMetric(&log)
+		case <-br.activePuppetMetricRequest:
+			br.updateActivePuppetMetricNow()
+		case <-br.activePuppetMetricLoopDone:
+			close(br.activePuppetMetricRequest)
+			return
+		}
+	}
+}
+
+func (br *SignalBridge) notifyBridgeBlocked(isBlocked bool) {
+	var msg string
+	if isBlocked {
+		msg = br.Config.Bridge.Limits.BlockBeginsNotification
+		nextNotification := br.lastBlockingNotification + int64(br.Config.Bridge.Limits.BlockNotificationIntervalSeconds)
+		// We're only checking if the block is active, since the unblock notification will not be resent and we want it ASAP
+		if now := time.Now().Unix(); nextNotification > now {
+			return
+		} else {
+			br.lastBlockingNotification = now
+		}
+	} else {
+		msg = br.Config.Bridge.Limits.BlockEndsNotification
+	}
+
+	admins := make([]id.UserID, 0, len(br.Config.Bridge.Permissions))
+	for key, permissionLevel := range br.Config.Bridge.Permissions {
+		if permissionLevel == bridgeconfig.PermissionLevelAdmin {
+			// Only explicit MXIDs are notified, not wildcards or domains
+			if _, _, err := id.UserID(key).ParseAndValidate(); err == nil {
+				admins = append(admins, id.UserID(key))
+			}
+		}
+	}
+	if len(admins) == 0 {
+		br.ZLog.Debug().Msg("No bridge admins to notify about the bridge being blocked")
+		return
+	}
+
+	allAdmins := string(admins[0])
+	for _, adminMXID := range admins[1:] {
+		allAdmins += "," + string(adminMXID)
+	}
+	br.ZLog.Debug().Msgf("Notifying bridge admins (%s) about bridge being blocked", allAdmins)
+	ctx := br.ZLog.WithContext(context.TODO())
+	for _, adminMXID := range admins {
+		admin := br.GetUserByMXID(adminMXID)
+		if admin == nil {
+			continue
+		}
+
+		roomID := admin.GetManagementRoomID()
+		if roomID == "" {
+			resp, err := br.Bot.CreateRoom(ctx, &mautrix.ReqCreateRoom{
+				Name:     "Signal Bridge notice room",
+				IsDirect: true,
+				Invite:   []id.UserID{adminMXID},
+			})
+			if err != nil {
+				br.ZLog.Warn().Err(err).Msg("Failed to create notice room")
+				continue
+			}
+			roomID = resp.RoomID
+			admin.SetManagementRoom(roomID)
+		}
+
+		// \u26a0 is a warning sign
+		br.Bot.SendNotice(ctx, roomID, "\u26a0 "+msg)
+	}
+}
+
 func main() {
 	br := &SignalBridge{
 		usersByMXID:     make(map[id.UserID]*User),
@@ -326,6 +457,13 @@ func main() {
 
 		puppets:             make(map[uuid.UUID]*Puppet),
 		puppetsByCustomMXID: make(map[id.UserID]*Puppet),
+
+		puppetActivity: &PuppetActivity{
+			currentUserCount: 0,
+			isBlocked:        false,
+		},
+		activePuppetMetricLoopDone: make(chan bool),
+		activePuppetMetricRequest:  make(chan bool),
 	}
 	br.Bridge = bridge.Bridge{
 		Name:              "mautrix-signal",

@@ -19,8 +19,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"go.mau.fi/util/dbutil"
 	"maunium.net/go/mautrix/id"
 )
@@ -52,6 +54,7 @@ const (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		)
 	`
+	oneDayMs = 24 * 60 * 60 * 1000
 )
 
 type PuppetQuery struct {
@@ -155,4 +158,39 @@ func (p *Puppet) Insert(ctx context.Context) error {
 
 func (p *Puppet) Update(ctx context.Context) error {
 	return p.qh.Exec(ctx, updatePuppetQuery, p.sqlVariables()...)
+}
+
+func (p *Puppet) UpdateActivityTs(ctx context.Context, activityTs int64) {
+	if p.LastActivityTs > activityTs {
+		return
+	}
+	log := zerolog.Ctx(ctx)
+	log.Debug().Msgf("Updating activity time for %s to %d", p.SignalID, activityTs)
+	p.LastActivityTs = activityTs
+	err := p.qh.Exec(ctx, "UPDATE puppet SET last_activity_ts=$1 WHERE uuid=$2", p.LastActivityTs, p.SignalID)
+	if err != nil {
+		log.Warn().Err(err).Msgf("Failed to update last_activity_ts for %s", p.SignalID)
+	}
+
+	if p.FirstActivityTs == 0 {
+		p.FirstActivityTs = activityTs
+		err = p.qh.Exec(ctx, "UPDATE puppet SET first_activity_ts=$1 WHERE uuid=$2 AND first_activity_ts is NULL", p.FirstActivityTs, p.SignalID)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to update first_activity_ts for %s", p.SignalID)
+		}
+	}
+}
+
+func (pq *PuppetQuery) GetRecentlyActiveCount(ctx context.Context, minActivityDays uint, maxActivityDays *uint) (count uint, err error) {
+	q := "SELECT COUNT(*) FROM puppet WHERE (last_activity_ts - first_activity_ts) > $1"
+	var row *sql.Row
+	lastActivityTs := oneDayMs * minActivityDays
+	if maxActivityDays == nil {
+		row = pq.GetDB().QueryRow(ctx, q, lastActivityTs)
+	} else {
+		q += " AND ($2 - last_activity_ts) <= $3"
+		row = pq.GetDB().QueryRow(ctx, q, lastActivityTs, time.Now().UnixMilli(), oneDayMs*(*maxActivityDays))
+	}
+	err = row.Scan(&count)
+	return
 }

@@ -35,9 +35,10 @@ import (
 )
 
 type MetricsHandler struct {
-	db     *database.Database
-	server *http.Server
-	log    log.Logger
+	db             *database.Database
+	server         *http.Server
+	log            log.Logger
+	puppetActivity *PuppetActivity
 
 	running      bool
 	ctx          context.Context
@@ -51,6 +52,9 @@ type MetricsHandler struct {
 	incomingRetryReceipts   *prometheus.CounterVec
 	connectionFailures      *prometheus.CounterVec
 	puppetCount             prometheus.Gauge
+	activePuppetCount       prometheus.Gauge
+	bridgeBlocked           prometheus.Gauge
+	requestCount            *prometheus.CounterVec
 	userCount               prometheus.Gauge
 	messageCount            prometheus.Gauge
 	portalCount             *prometheus.GaugeVec
@@ -67,16 +71,17 @@ type MetricsHandler struct {
 	loggedInStateLock  sync.Mutex
 }
 
-func NewMetricsHandler(address string, log log.Logger, db *database.Database) *MetricsHandler {
+func NewMetricsHandler(address string, log log.Logger, db *database.Database, puppetActivity *PuppetActivity) *MetricsHandler {
 	portalCount := promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "bridge_portals_total",
 		Help: "Number of portal rooms on Matrix",
 	}, []string{"type", "encrypted"})
 	return &MetricsHandler{
-		db:      db,
-		server:  &http.Server{Addr: address, Handler: promhttp.Handler()},
-		log:     log,
-		running: false,
+		db:             db,
+		server:         &http.Server{Addr: address, Handler: promhttp.Handler()},
+		log:            log,
+		running:        false,
+		puppetActivity: puppetActivity,
 
 		matrixEventHandling: promauto.NewHistogramVec(prometheus.HistogramOpts{
 			Name: "matrix_event",
@@ -111,6 +116,18 @@ func NewMetricsHandler(address string, log log.Logger, db *database.Database) *M
 			Name: "bridge_puppets_total",
 			Help: "Number of Signal users bridged into Matrix",
 		}),
+		activePuppetCount: promauto.NewGauge(prometheus.GaugeOpts{
+			Name: "bridge_active_puppets_total",
+			Help: "Number of active Signal users bridged into Matrix",
+		}),
+		bridgeBlocked: promauto.NewGauge(prometheus.GaugeOpts{
+			Name: "bridge_blocked",
+			Help: "Is the bridge currently blocking messages",
+		}),
+		requestCount: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "bridge_signal_request",
+			Help: "The results of signal request processing",
+		}, []string{"result", "type"}),
 		userCount: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "bridge_users_total",
 			Help: "Number of Matrix users using the bridge",
@@ -226,6 +243,19 @@ func (mh *MetricsHandler) TrackConnectionState(signalID string, connected bool) 
 	}
 }
 
+func (mh *MetricsHandler) TrackRequest(counterType string, success bool) {
+	var result string
+	if success {
+		result = "success"
+	} else {
+		result = "error"
+	}
+	mh.requestCount.With(prometheus.Labels{
+		"type":   counterType,
+		"result": result,
+	}).Inc()
+}
+
 func (mh *MetricsHandler) updateStats() {
 	start := time.Now()
 	var puppetCount int
@@ -235,6 +265,8 @@ func (mh *MetricsHandler) updateStats() {
 	} else {
 		mh.puppetCount.Set(float64(puppetCount))
 	}
+
+	mh.updatePuppetActivity()
 
 	var userCount int
 	err = mh.db.QueryRow(mh.ctx, `SELECT COUNT(*) FROM "user"`).Scan(&userCount)
@@ -272,6 +304,15 @@ func (mh *MetricsHandler) updateStats() {
 		mh.unencryptedPrivateCount.Set(float64(encryptedPrivateCount))
 	}
 	mh.countCollection.Observe(time.Since(start).Seconds())
+}
+
+func (mh *MetricsHandler) updatePuppetActivity() {
+	mh.activePuppetCount.Set(float64(mh.puppetActivity.currentUserCount))
+	if mh.puppetActivity.isBlocked {
+		mh.bridgeBlocked.Set(1)
+	} else {
+		mh.bridgeBlocked.Set(0)
+	}
 }
 
 func (mh *MetricsHandler) startUpdatingStats() {

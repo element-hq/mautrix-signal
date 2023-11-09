@@ -293,6 +293,22 @@ bridge:
             m.video: "<b>{{ .Sender.Displayname }}</b> sent a video"
             m.location: "<b>{{ .Sender.Displayname }}</b> sent a location"
 
+    # Limit usage of the bridge
+    limits:
+        # The maximum number of bridge puppets that can be "active" before the limit is reached
+        max_puppet_limit: 0
+        # The minimum amount of days a puppet must be active for before they are considered "active".
+        min_puppet_activity_days: 0
+        # The number of days after a puppets last activity where they are considered inactive again.
+        puppet_inactivity_days: 30
+        # Should the bridge block traffic when a limit has been reached
+        block_on_limit_reached: true
+        # The message sent to bridge admins when the bridges starts/stops being blocked
+        block_begins_notification: 'The bridge is currently blocking messages. You may need to increase your usage limits in EMS.'
+        block_ends_notification: 'The bridge is no longer blocking messages.'
+        # The minimum interval between blocking notification being sent
+        block_notification_interval_seconds: 3600
+
 # Logging config. See https://github.com/tulir/zeroconfig for details.
 logging:
     min_level: debug

@@ -51,6 +51,10 @@ import (
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
 )
 
+// The delay between the current time and msg time before we consider the message too stale to be
+// part of a users activity
+const MaximumMsgLagActivityMs = 5 * 60 * 1000
+
 func (br *SignalBridge) GetPortalByMXID(mxid id.RoomID) *Portal {
 	br.portalsLock.Lock()
 	defer br.portalsLock.Unlock()
@@ -364,6 +368,11 @@ func (portal *Portal) handleMatrixMessages(msg portalMatrixMessage) {
 }
 
 func (portal *Portal) handleMatrixMessage(ctx context.Context, sender *User, evt *event.Event) {
+	if portal.bridge.puppetActivity.isBlocked {
+		portal.log.Warn().Msgf("Bridge is blocking messages, not handling message from %s %s", sender.MXID, evt.ID)
+		portal.bridge.notifyBridgeBlocked(true)
+		return
+	}
 	log := zerolog.Ctx(ctx)
 	evtTS := time.UnixMilli(evt.Timestamp)
 	timings := messageTimings{
@@ -838,6 +847,11 @@ func (portal *Portal) GetSignalReply(ctx context.Context, content *event.Message
 }
 
 func (portal *Portal) handleSignalMessage(portalMessage portalSignalMessage) {
+	if portal.bridge.puppetActivity.isBlocked {
+		portal.log.Warn().Msgf("Bridge is blocking messages, not handling message from %s", portalMessage.evt.Info.Sender)
+		portal.bridge.notifyBridgeBlocked(true)
+		return
+	}
 	sender := portal.bridge.GetPuppetBySignalID(portalMessage.evt.Info.Sender)
 	if sender == nil {
 		portal.log.Warn().
@@ -845,18 +859,38 @@ func (portal *Portal) handleSignalMessage(portalMessage portalSignalMessage) {
 			Msg("Couldn't get puppet for message")
 		return
 	}
+	var msgType string
+	var timestamp uint64
 	switch typedEvt := portalMessage.evt.Event.(type) {
 	case *signalpb.DataMessage:
+		msgType = "data"
+		timestamp = typedEvt.GetTimestamp()
 		portal.handleSignalDataMessage(portalMessage.user, sender, typedEvt)
 	case *signalpb.TypingMessage:
+		msgType = "typing"
+		timestamp = typedEvt.GetTimestamp()
 		portal.handleSignalTypingMessage(sender, typedEvt)
 	case *signalpb.EditMessage:
-		portal.handleSignalEditMessage(sender, typedEvt.GetTargetSentTimestamp(), typedEvt.GetDataMessage())
+		msgType = "edit"
+		timestamp = typedEvt.GetTargetSentTimestamp()
+		portal.handleSignalEditMessage(sender, timestamp, typedEvt.GetDataMessage())
 	default:
 		portal.log.Error().
 			Type("data_type", typedEvt).
 			Msg("Invalid inner event type inside ChatEvent")
 	}
+
+	tsMilli := int64(timestamp)
+	if sender.SignalID == portalMessage.user.SignalID {
+		// Ignore tracking activity for our own users
+	} else if tsMilli+MaximumMsgLagActivityMs > time.Now().UnixMilli() {
+		ctx := portal.bridge.ZLog.WithContext(context.TODO())
+		sender.UpdateActivityTs(ctx, tsMilli)
+		portal.bridge.UpdateActivePuppetMetric()
+	} else {
+		portal.log.Debug().Msgf("Did not update activity for %s, ts %d was too stale", sender.SignalID, tsMilli)
+	}
+	portal.bridge.Metrics.TrackSignalMessage(time.UnixMilli(tsMilli), msgType)
 }
 
 func (portal *Portal) handleSignalDataMessage(source *User, sender *Puppet, msg *signalpb.DataMessage) {

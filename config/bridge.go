@@ -78,6 +78,16 @@ type BridgeConfig struct {
 
 	usernameTemplate    *template.Template `yaml:"-"`
 	displaynameTemplate *template.Template `yaml:"-"`
+
+	Limits struct {
+		MaxPuppetLimit                   uint   `yaml:"max_puppet_limit"`
+		MinPuppetActivityDays            uint   `yaml:"min_puppet_activity_days"`
+		PuppetInactivityDays             *uint  `yaml:"puppet_inactivity_days"`
+		BlockOnLimitReached              bool   `yaml:"block_on_limit_reached"`
+		BlockBeginsNotification          string `yaml:"block_begins_notification"`
+		BlockEndsNotification            string `yaml:"block_ends_notification"`
+		BlockNotificationIntervalSeconds uint   `yaml:"block_notification_interval_seconds"`
+	} `yaml:"limits"`
 }
 
 func (bc *BridgeConfig) GetResendBridgeInfo() bool {
