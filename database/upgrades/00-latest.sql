@@ -1,4 +1,4 @@
--- v0 -> v19 (compatible with v17+): Latest revision
+-- v0 -> v20 (compatible with v18+): Latest revision
 
 CREATE TABLE portal (
     chat_id     TEXT    NOT NULL,
@@ -38,6 +38,9 @@ CREATE TABLE puppet (
 
     custom_mxid  TEXT,
     access_token TEXT NOT NULL,
+
+    first_activity_ts BIGINT,
+    last_activity_ts BIGINT,
 
     CONSTRAINT puppet_custom_mxid_unique UNIQUE(custom_mxid)
 );

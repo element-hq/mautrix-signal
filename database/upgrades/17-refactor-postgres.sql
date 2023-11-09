@@ -1,4 +1,4 @@
--- v16: Refactor types (Postgres)
+-- v17: Refactor types (Postgres)
 -- only: postgres
 
 DROP TABLE IF EXISTS user_portal;

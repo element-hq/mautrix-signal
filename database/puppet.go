@@ -28,7 +28,7 @@ import (
 const (
 	puppetBaseSelect = `
         SELECT uuid, number, name, name_quality, avatar_path, avatar_hash, avatar_url, name_set, avatar_set,
-               contact_info_set, is_registered, custom_mxid, access_token
+               contact_info_set, is_registered, custom_mxid, access_token, first_activity_ts, last_activity_ts
         FROM puppet
 	`
 	getPuppetBySignalIDQuery   = puppetBaseSelect + `WHERE uuid=$1`
@@ -76,6 +76,9 @@ type Puppet struct {
 	CustomMXID     id.UserID
 	AccessToken    string
 	ContactInfoSet bool
+
+	FirstActivityTs int64
+	LastActivityTs  int64
 }
 
 func newPuppet(qh *dbutil.QueryHelper[*Puppet]) *Puppet {
@@ -100,6 +103,7 @@ func (pq *PuppetQuery) GetAllWithCustomMXID(ctx context.Context) ([]*Puppet, err
 
 func (p *Puppet) Scan(row dbutil.Scannable) (*Puppet, error) {
 	var number, customMXID sql.NullString
+	var firstActivityTs, lastActivityTs sql.NullInt64
 	err := row.Scan(
 		&p.SignalID,
 		&number,
@@ -114,12 +118,16 @@ func (p *Puppet) Scan(row dbutil.Scannable) (*Puppet, error) {
 		&p.IsRegistered,
 		&customMXID,
 		&p.AccessToken,
+		&firstActivityTs,
+		&lastActivityTs,
 	)
 	if err != nil {
 		return nil, nil
 	}
 	p.Number = number.String
 	p.CustomMXID = id.UserID(customMXID.String)
+	p.FirstActivityTs = firstActivityTs.Int64
+	p.LastActivityTs = lastActivityTs.Int64
 	return p, nil
 }
 

@@ -1,4 +1,4 @@
--- v18 (compatible with v17+): Add columns for personal filtering space info
+-- v19 (compatible with v18+): Add columns for personal filtering space info
 ALTER TABLE "user" ADD COLUMN space_room TEXT;
 
 DROP TABLE IF EXISTS user_portal;

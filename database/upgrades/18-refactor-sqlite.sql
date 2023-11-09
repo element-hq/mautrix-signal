@@ -1,8 +1,8 @@
--- v17: Refactor types (SQLite)
+-- v18: Refactor types (SQLite)
 -- transaction: off
 -- only: sqlite
 
--- This is separate from v16 so that postgres can run with transaction: on
+-- This is separate from v17 so that postgres can run with transaction: on
 -- (split upgrades by dialect don't currently allow disabling transaction in only one dialect)
 
 DROP TABLE IF EXISTS user_portal;
@@ -145,6 +145,9 @@ CREATE TABLE puppet_new (
     custom_mxid  TEXT,
     access_token TEXT NOT NULL,
 
+    first_activity_ts BIGINT,
+    last_activity_ts BIGINT,
+
     CONSTRAINT puppet_custom_mxid_unique UNIQUE(custom_mxid)
 );
 
@@ -155,7 +158,8 @@ UPDATE puppet
 INSERT INTO puppet_new
     SELECT uuid, number, COALESCE(name, ''), COALESCE(name_quality, 0), COALESCE(avatar_hash, ''),
         COALESCE(avatar_url, ''), name_set, avatar_set, is_registered, contact_info_set,
-        CASE WHEN custom_mxid='' THEN NULL ELSE custom_mxid END, COALESCE(access_token, '')
+        CASE WHEN custom_mxid='' THEN NULL ELSE custom_mxid END, COALESCE(access_token, ''),
+        first_activity_ts, last_activity_ts
     FROM puppet;
 DROP TABLE puppet;
 ALTER TABLE puppet_new RENAME TO puppet;
