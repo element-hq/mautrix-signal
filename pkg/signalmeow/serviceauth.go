@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 type basicExpiringCredentials struct {

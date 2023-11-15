@@ -32,8 +32,8 @@ import (
 	"maunium.net/go/mautrix/bridge"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/database"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
+	"github.com/element-hq/mautrix-signal/database"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
 )
 
 func (br *SignalBridge) GetPuppetByMXID(mxid id.UserID) *Puppet {

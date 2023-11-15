@@ -28,9 +28,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 func hmacSHA256(key, input []byte) []byte {

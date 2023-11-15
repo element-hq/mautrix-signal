@@ -6,7 +6,7 @@
 # The script will generate the protobuf files for the following languages:
 # - Go
 
-PKG_IMPORT_PATH="go.mau.fi/mautrix-signal/pkg/signalmeow/signalpb"
+PKG_IMPORT_PATH="github.com/element-hq/mautrix-signal/pkg/signalmeow/signalpb"
 
 for file in *.proto
 do

@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 // SQLStore is basically a StoreContainer with an ACI UUID attached to it,

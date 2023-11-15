@@ -23,11 +23,11 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/database"
-	"go.mau.fi/mautrix-signal/msgconv/matrixfmt"
-	"go.mau.fi/mautrix-signal/msgconv/signalfmt"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/database"
+	"github.com/element-hq/mautrix-signal/msgconv/matrixfmt"
+	"github.com/element-hq/mautrix-signal/msgconv/signalfmt"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 type PortalMethods interface {

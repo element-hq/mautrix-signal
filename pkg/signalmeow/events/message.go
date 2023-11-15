@@ -19,8 +19,8 @@ package events
 import (
 	"github.com/google/uuid"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
 )
 
 type SignalEvent interface {

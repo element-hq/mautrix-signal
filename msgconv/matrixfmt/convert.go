@@ -19,7 +19,7 @@ package matrixfmt
 import (
 	"maunium.net/go/mautrix/event"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 func Parse(parser *HTMLParser, content *event.MessageEventContent) (string, []*signalpb.BodyRange) {

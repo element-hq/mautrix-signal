@@ -28,8 +28,8 @@ import (
 	"github.com/rs/zerolog"
 	"nhooyr.io/websocket"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/wspb"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/wspb"
 )
 
 const WebsocketProvisioningPath = "/v1/websocket/provisioning/"

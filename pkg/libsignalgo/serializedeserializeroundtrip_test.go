@@ -22,7 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 type Serializable interface {

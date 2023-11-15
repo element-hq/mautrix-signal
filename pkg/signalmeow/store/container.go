@@ -10,8 +10,8 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/dbutil"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/store/upgrades"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/store/upgrades"
 )
 
 var _ DeviceStore = (*StoreContainer)(nil)

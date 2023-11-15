@@ -32,8 +32,8 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/random"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 const (

@@ -19,7 +19,7 @@ package types
 import (
 	"github.com/google/uuid"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 // The Contact struct combines information from two sources:

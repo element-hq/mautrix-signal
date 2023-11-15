@@ -24,10 +24,10 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/events"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/events"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/store"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 type Client struct {

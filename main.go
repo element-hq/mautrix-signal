@@ -34,12 +34,12 @@ import (
 	"maunium.net/go/mautrix/format"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/config"
-	"go.mau.fi/mautrix-signal/database"
-	"go.mau.fi/mautrix-signal/msgconv/matrixfmt"
-	"go.mau.fi/mautrix-signal/msgconv/signalfmt"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"
+	"github.com/element-hq/mautrix-signal/config"
+	"github.com/element-hq/mautrix-signal/database"
+	"github.com/element-hq/mautrix-signal/msgconv/matrixfmt"
+	"github.com/element-hq/mautrix-signal/msgconv/signalfmt"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/store"
 )
 
 //go:embed example-config.yaml

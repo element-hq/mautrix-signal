@@ -36,7 +36,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/pkg/signalmeow"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
 )
 
 type provisioningContextKey int

@@ -28,7 +28,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 type BeeperLinkPreview struct {

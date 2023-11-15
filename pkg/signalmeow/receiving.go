@@ -30,11 +30,11 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/events"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/events"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 type SignalConnectionEvent int

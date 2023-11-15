@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 	"go.mau.fi/util/dbutil"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 var _ libsignalgo.SenderKeyStore = (*SQLStore)(nil)

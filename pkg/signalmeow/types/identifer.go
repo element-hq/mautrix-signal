@@ -20,7 +20,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 type GroupIdentifier string

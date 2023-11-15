@@ -30,8 +30,8 @@ import (
 	"golang.org/x/exp/slices"
 	"google.golang.org/protobuf/proto"
 
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 type StorageUpdate struct {

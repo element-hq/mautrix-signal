@@ -34,8 +34,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
 )
 
 type Capabilities struct {

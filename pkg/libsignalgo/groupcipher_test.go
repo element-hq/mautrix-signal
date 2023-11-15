@@ -23,7 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 )
 
 // From PublicAPITests.swift:testGroupCipher

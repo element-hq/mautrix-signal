@@ -1,4 +1,4 @@
-module go.mau.fi/mautrix-signal
+module github.com/element-hq/mautrix-signal
 
 go 1.20
 

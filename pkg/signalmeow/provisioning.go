@@ -33,12 +33,12 @@ import (
 	"google.golang.org/protobuf/proto"
 	"nhooyr.io/websocket"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/web"
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/wspb"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/store"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/web"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/wspb"
 )
 
 type ConfirmDeviceResponse struct {

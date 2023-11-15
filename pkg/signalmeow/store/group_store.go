@@ -23,7 +23,7 @@ import (
 
 	"go.mau.fi/util/dbutil"
 
-	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
+	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
 )
 
 var _ GroupStore = (*SQLStore)(nil)

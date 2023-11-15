@@ -29,7 +29,7 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/msgconv"
+	"github.com/element-hq/mautrix-signal/msgconv"
 )
 
 var (

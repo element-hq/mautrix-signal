@@ -31,8 +31,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"maunium.net/go/mautrix/event"
 
-	"go.mau.fi/mautrix-signal/msgconv/matrixfmt"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/msgconv/matrixfmt"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 var (

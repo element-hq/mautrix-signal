@@ -25,7 +25,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/database"
+	"github.com/element-hq/mautrix-signal/database"
 )
 
 type DisappearingMessagesManager struct {

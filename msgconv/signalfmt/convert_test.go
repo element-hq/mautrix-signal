@@ -25,8 +25,8 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"go.mau.fi/mautrix-signal/msgconv/signalfmt"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/msgconv/signalfmt"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 var realUser = uuid.New()

@@ -28,8 +28,8 @@ import (
 	"golang.org/x/crypto/hkdf"
 	"google.golang.org/protobuf/proto"
 
-	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
-	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
+	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
+	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )
 
 type ProvisioningCipher struct {

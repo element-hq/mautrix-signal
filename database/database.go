@@ -23,7 +23,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"go.mau.fi/util/dbutil"
 
-	"go.mau.fi/mautrix-signal/database/upgrades"
+	"github.com/element-hq/mautrix-signal/database/upgrades"
 )
 
 type Database struct {
