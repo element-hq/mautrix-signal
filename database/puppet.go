@@ -164,19 +164,19 @@ func (p *Puppet) UpdateActivityTs(ctx context.Context, activityTs int64) {
 	if p.LastActivityTs > activityTs {
 		return
 	}
-	log := zerolog.Ctx(ctx)
-	log.Debug().Msgf("Updating activity time for %s to %d", p.SignalID, activityTs)
+	log := zerolog.Ctx(ctx).With().Stringer("signal_user_id", p.SignalID).Logger()
+	log.Debug().Int64("activity_ts", activityTs).Msg("Updating activity time")
 	p.LastActivityTs = activityTs
 	err := p.qh.Exec(ctx, "UPDATE puppet SET last_activity_ts=$1 WHERE uuid=$2", p.LastActivityTs, p.SignalID)
 	if err != nil {
-		log.Warn().Err(err).Msgf("Failed to update last_activity_ts for %s", p.SignalID)
+		log.Warn().Err(err).Msg("Failed to update last_activity_ts")
 	}
 
 	if p.FirstActivityTs == 0 {
 		p.FirstActivityTs = activityTs
 		err = p.qh.Exec(ctx, "UPDATE puppet SET first_activity_ts=$1 WHERE uuid=$2 AND first_activity_ts is NULL", p.FirstActivityTs, p.SignalID)
 		if err != nil {
-			log.Warn().Err(err).Msgf("Failed to update first_activity_ts for %s", p.SignalID)
+			log.Warn().Err(err).Msg("Failed to update first_activity_ts")
 		}
 	}
 }

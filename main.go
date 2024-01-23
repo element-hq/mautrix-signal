@@ -358,7 +358,7 @@ func (br *SignalBridge) updateActivePuppetMetric(log *zerolog.Logger) {
 			br.notifyBridgeBlocked(blocked)
 		}
 	}
-	log.Debug().Msgf("Current active puppet count is %d", activeUsers)
+	log.Debug().Uint("active_puppet_count", activeUsers).Send()
 	br.puppetActivity.currentUserCount = activeUsers
 
 	if br.Config.Metrics.Enabled {
@@ -417,7 +417,7 @@ func (br *SignalBridge) notifyBridgeBlocked(isBlocked bool) {
 	for _, adminMXID := range admins[1:] {
 		allAdmins += "," + string(adminMXID)
 	}
-	br.ZLog.Debug().Msgf("Notifying bridge admins (%s) about bridge being blocked", allAdmins)
+	br.ZLog.Debug().Str("admins", allAdmins).Msg("Notifying bridge admins about bridge being blocked")
 	ctx := br.ZLog.WithContext(context.TODO())
 	for _, adminMXID := range admins {
 		admin := br.GetUserByMXID(adminMXID)

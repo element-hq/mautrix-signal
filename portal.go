@@ -368,12 +368,15 @@ func (portal *Portal) handleMatrixMessages(msg portalMatrixMessage) {
 }
 
 func (portal *Portal) handleMatrixMessage(ctx context.Context, sender *User, evt *event.Event) {
+	log := zerolog.Ctx(ctx)
 	if portal.bridge.puppetActivity.isBlocked {
-		portal.log.Warn().Msgf("Bridge is blocking messages, not handling message from %s %s", sender.MXID, evt.ID)
+		log.Warn().
+			Str("sender_id", sender.MXID.String()).
+			Str("event_id", evt.ID.String()).
+			Msg("Bridge is blocking messages, not handling message")
 		portal.bridge.notifyBridgeBlocked(true)
 		return
 	}
-	log := zerolog.Ctx(ctx)
 	evtTS := time.UnixMilli(evt.Timestamp)
 	timings := messageTimings{
 		initReceive:  evt.Mautrix.ReceivedAt.Sub(evtTS),
@@ -848,7 +851,9 @@ func (portal *Portal) GetSignalReply(ctx context.Context, content *event.Message
 
 func (portal *Portal) handleSignalMessage(portalMessage portalSignalMessage) {
 	if portal.bridge.puppetActivity.isBlocked {
-		portal.log.Warn().Msgf("Bridge is blocking messages, not handling message from %s", portalMessage.evt.Info.Sender)
+		portal.log.Warn().
+			Str("sender_uuid", portalMessage.evt.Info.Sender.String()).
+			Msg("Bridge is blocking messages, not handling message")
 		portal.bridge.notifyBridgeBlocked(true)
 		return
 	}
@@ -888,7 +893,10 @@ func (portal *Portal) handleSignalMessage(portalMessage portalSignalMessage) {
 		sender.UpdateActivityTs(ctx, tsMilli)
 		portal.bridge.UpdateActivePuppetMetric()
 	} else {
-		portal.log.Debug().Msgf("Did not update activity for %s, ts %d was too stale", sender.SignalID, tsMilli)
+		portal.log.Debug().
+			Str("sender_uuid", sender.SignalID.String()).
+			Int64("unsigned_msg_ts", tsMilli).
+			Msg("Did not update activity for sender, ts was too stale")
 	}
 	portal.bridge.Metrics.TrackSignalMessage(time.UnixMilli(tsMilli), msgType)
 }
