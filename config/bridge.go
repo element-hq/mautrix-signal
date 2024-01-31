@@ -23,9 +23,9 @@ import (
 	"text/template"
 	"time"
 
-	"maunium.net/go/mautrix/bridge/bridgeconfig"
-	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
+	"github.com/element-hq/mautrix-go/bridge/bridgeconfig"
+	"github.com/element-hq/mautrix-go/event"
+	"github.com/element-hq/mautrix-go/id"
 
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
 )

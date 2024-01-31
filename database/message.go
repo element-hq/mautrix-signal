@@ -24,7 +24,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"go.mau.fi/util/dbutil"
-	"maunium.net/go/mautrix/id"
+
+	"github.com/element-hq/mautrix-go/id"
 )
 
 const (

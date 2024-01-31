@@ -25,8 +25,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/tidwall/gjson"
 	"google.golang.org/protobuf/proto"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/event"
+
+	"github.com/element-hq/mautrix-go"
+	"github.com/element-hq/mautrix-go/event"
 
 	signalpb "go.mau.fi/mautrix-signal/pkg/signalmeow/protobuf"
 )

@@ -24,10 +24,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/skip2/go-qrcode"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/bridge/commands"
-	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
+
+	"github.com/element-hq/mautrix-go"
+	"github.com/element-hq/mautrix-go/bridge/commands"
+	"github.com/element-hq/mautrix-go/event"
+	"github.com/element-hq/mautrix-go/id"
 
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"
 )

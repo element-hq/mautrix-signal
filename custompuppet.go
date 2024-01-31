@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	"maunium.net/go/mautrix/id"
+	"github.com/element-hq/mautrix-go/id"
 )
 
 func (puppet *Puppet) SwitchCustomMXID(accessToken string, mxid id.UserID) error {
