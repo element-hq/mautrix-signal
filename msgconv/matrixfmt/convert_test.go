@@ -6,8 +6,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
-	"maunium.net/go/mautrix/event"
-	"maunium.net/go/mautrix/id"
+
+	"github.com/element-hq/mautrix-go/event"
+	"github.com/element-hq/mautrix-go/id"
 
 	"github.com/element-hq/mautrix-signal/msgconv/matrixfmt"
 	"github.com/element-hq/mautrix-signal/msgconv/signalfmt"

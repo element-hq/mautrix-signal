@@ -22,7 +22,8 @@ import (
 
 	up "go.mau.fi/util/configupgrade"
 	"go.mau.fi/util/random"
-	"maunium.net/go/mautrix/bridge/bridgeconfig"
+
+	"github.com/element-hq/mautrix-go/bridge/bridgeconfig"
 )
 
 func DoUpgrade(helper *up.Helper) {

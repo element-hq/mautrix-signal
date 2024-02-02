@@ -33,8 +33,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/hlog"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/id"
+
+	"github.com/element-hq/mautrix-go"
+	"github.com/element-hq/mautrix-go/id"
 
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
 )

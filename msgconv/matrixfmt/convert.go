@@ -17,7 +17,7 @@
 package matrixfmt
 
 import (
-	"maunium.net/go/mautrix/event"
+	"github.com/element-hq/mautrix-go/event"
 
 	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
 )

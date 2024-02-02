@@ -29,7 +29,8 @@ import (
 	"go.mau.fi/util/variationselector"
 	"golang.org/x/exp/constraints"
 	"google.golang.org/protobuf/proto"
-	"maunium.net/go/mautrix/event"
+
+	"github.com/element-hq/mautrix-go/event"
 
 	"github.com/element-hq/mautrix-signal/msgconv/matrixfmt"
 	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
