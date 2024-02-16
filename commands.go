@@ -380,7 +380,7 @@ func fnLogin(ce *WrappedCommandEvent) {
 	// First get the provisioning URL
 	provChan, err := ce.User.Login()
 	if err != nil {
-		ce.Log.Errorln("Failure logging in:", err)
+		ce.ZLog.Err(err).Msg("Failure logging in")
 		ce.Reply("Failure logging in: %v", err)
 		return
 	}
@@ -448,7 +448,7 @@ func (user *User) sendQR(ce *WrappedCommandEvent, code string, prevQR, prevMsg i
 	}
 	resp, err := ce.Bot.SendMessageEvent(ce.Ctx, ce.RoomID, event.EventMessage, &content)
 	if err != nil {
-		ce.Log.Errorln("Failed to send QR code to user:", err)
+		ce.ZLog.Err(err).Msg("Failed to send QR code to user")
 	} else if len(prevQR) == 0 {
 		prevQR = resp.EventID
 	}
@@ -463,7 +463,7 @@ func (user *User) sendQR(ce *WrappedCommandEvent, code string, prevQR, prevMsg i
 	}
 	resp, err = ce.Bot.SendMessageEvent(ce.Ctx, ce.RoomID, event.EventMessage, &content)
 	if err != nil {
-		ce.Log.Errorln("Failed to send raw code to user:", err)
+		ce.ZLog.Err(err).Msg("Failed to send raw code to user")
 	} else if len(prevMsg) == 0 {
 		prevMsg = resp.EventID
 	}
@@ -474,7 +474,7 @@ func (user *User) uploadQR(ce *WrappedCommandEvent, code string) (event.MessageE
 	const size = 512
 	qrCode, err := qrcode.Encode(code, qrcode.Low, size)
 	if err != nil {
-		ce.Log.Errorln("Failed to encode QR code:", err)
+		ce.ZLog.Err(err).Msg("Failed to encode QR code")
 		ce.Reply("Failed to encode QR code: %v", err)
 		return event.MessageEventContent{}, false
 	}
@@ -483,7 +483,7 @@ func (user *User) uploadQR(ce *WrappedCommandEvent, code string) (event.MessageE
 
 	resp, err := bot.UploadBytes(ce.Ctx, qrCode, "image/png")
 	if err != nil {
-		ce.Log.Errorln("Failed to upload QR code:", err)
+		ce.ZLog.Err(err).Msg("Failed to upload QR code")
 		ce.Reply("Failed to upload QR code: %v", err)
 		return event.MessageEventContent{}, false
 	}
@@ -508,7 +508,7 @@ func canDeletePortal(ctx context.Context, portal *Portal, userID id.UserID) bool
 	members, err := portal.MainIntent().JoinedMembers(ctx, portal.MXID)
 	if err != nil {
 		portal.log.Err(err).
-			Str("user_id", userID.String()).
+			Stringer("user_id", userID).
 			Msg("Failed to get joined members to check if user can delete portal")
 		return false
 	}

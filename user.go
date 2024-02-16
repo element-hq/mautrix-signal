@@ -167,8 +167,7 @@ type User struct {
 
 	Client *signalmeow.Client
 
-	BridgeState     *bridge.BridgeStateQueue
-	bridgeStateLock sync.Mutex
+	BridgeState *bridge.BridgeStateQueue
 
 	spaceMembershipChecked bool
 	spaceCreateLock        sync.Mutex
@@ -243,10 +242,7 @@ func (user *User) ensureInvited(ctx context.Context, intent *appservice.IntentAP
 	}
 	customPuppet := user.bridge.GetPuppetByCustomMXID(user.MXID)
 	if customPuppet != nil && customPuppet.CustomIntent() != nil {
-		log.Debug().Msg("adding will_auto_accept to invite content")
 		extraContent["fi.mau.will_auto_accept"] = true
-	} else {
-		log.Debug().Msg("NOT adding will_auto_accept to invite content")
 	}
 	_, err := intent.InviteUser(ctx, roomID, &mautrix.ReqInviteUser{UserID: user.MXID}, extraContent)
 	var httpErr mautrix.HTTPError
@@ -264,7 +260,6 @@ func (user *User) ensureInvited(ctx context.Context, intent *appservice.IntentAP
 	}
 
 	if customPuppet != nil && customPuppet.CustomIntent() != nil {
-		log.Debug().Msg("ensuring custom puppet is joined")
 		err = customPuppet.CustomIntent().EnsureJoined(ctx, roomID, appservice.EnsureJoinedParams{IgnoreCache: true})
 		if err != nil {
 			log.Warn().Err(err).Msg("Failed to auto-join custom puppet")
@@ -411,7 +406,7 @@ func (user *User) startupTryConnect(retryCount int) {
 			var connectionStatus signalmeow.SignalConnectionStatus
 			if peekedConnectionStatus.Event != signalmeow.SignalConnectionEventNone {
 				user.log.Debug().
-					Str("peeked_connection_status_event", peekedConnectionStatus.Event.String()).
+					Stringer("peeked_connection_status_event", peekedConnectionStatus.Event).
 					Msg("Using peeked connectionStatus event")
 				connectionStatus = peekedConnectionStatus
 				peekedConnectionStatus = signalmeow.SignalConnectionStatus{}
@@ -598,7 +593,7 @@ func (user *User) populateSignalDevice() *signalmeow.Client {
 	defer user.Unlock()
 	log := user.log.With().
 		Str("action", "populate signal device").
-		Str("signal_id", user.SignalID.String()).
+		Stringer("signal_id", user.SignalID).
 		Logger()
 
 	if user.SignalID == uuid.Nil {
@@ -629,8 +624,8 @@ func (user *User) populateSignalDevice() *signalmeow.Client {
 func (user *User) handleReceipt(evt *events.Receipt) {
 	log := user.log.With().
 		Str("action", "handle receipt").
-		Str("receipt_type", evt.Content.GetType().String()).
-		Str("sender_uuid", evt.Sender.String()).
+		Stringer("receipt_type", evt.Content.GetType()).
+		Stringer("sender_uuid", evt.Sender).
 		Logger()
 	ctx := log.WithContext(context.TODO())
 	messages, err := user.bridge.DB.Message.GetManyBySignalID(ctx, user.SignalID, evt.Content.GetTimestamp(), user.SignalID, false)
@@ -730,7 +725,7 @@ func (user *User) handleReadSelf(evt *events.ReadSelf) {
 			Str("action", "handle read self").
 			Str("chat_id", msg.SignalChatID).
 			Uint64("msg_timestamp", msg.Timestamp).
-			Str("msg_mxid", msg.MXID.String()).
+			Stringer("msg_mxid", msg.MXID).
 			Msg("Bridging own read receipt")
 		portal.ScheduleDisappearing()
 		user.SetLastReadTS(ctx, portal.PortalKey, msg.Timestamp)
@@ -748,7 +743,7 @@ func (user *User) handleContactList(evt *events.ContactList) {
 		if puppet == nil {
 			return
 		}
-		puppet.UpdateInfo(ctx, user, contact)
+		puppet.UpdateInfo(ctx, user)
 	}
 }
 

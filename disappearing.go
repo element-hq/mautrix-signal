@@ -49,7 +49,7 @@ func (dmm *DisappearingMessagesManager) ScheduleDisappearingForRoom(ctx context.
 			log.Err(err).Msg("Failed to schedule disappearing message")
 		} else {
 			log.Debug().
-				Str("event_id", disappearingMessage.EventID.String()).
+				Stringer("event_id", disappearingMessage.EventID).
 				Time("expire_at", disappearingMessage.ExpireAt).
 				Msg("Scheduling disappearing message")
 		}
@@ -104,7 +104,7 @@ func (dmm *DisappearingMessagesManager) redactExpiredMessages(ctx context.Contex
 			err = msg.Delete(ctx)
 			if err != nil {
 				log.Err(err).
-					Str("event_id", msg.EventID.String()).
+					Stringer("event_id", msg.EventID).
 					Msg("Failed to delete disappearing message row in database")
 			}
 			continue
@@ -115,19 +115,19 @@ func (dmm *DisappearingMessagesManager) redactExpiredMessages(ctx context.Contex
 		})
 		if err != nil {
 			log.Err(err).
-				Str("event_id", msg.EventID.String()).
-				Str("room_id", msg.RoomID.String()).
+				Stringer("event_id", msg.EventID).
+				Stringer("room_id", msg.RoomID).
 				Msg("Failed to redact message")
 		} else {
 			log.Err(err).
-				Str("event_id", msg.EventID.String()).
-				Str("room_id", msg.RoomID.String()).
+				Stringer("event_id", msg.EventID).
+				Stringer("room_id", msg.RoomID).
 				Msg("Redacted message")
 		}
 		err = msg.Delete(ctx)
 		if err != nil {
 			log.Err(err).
-				Str("event_id", msg.EventID.String()).
+				Stringer("event_id", msg.EventID).
 				Msg("Failed to delete disappearing message row in database")
 		}
 	}

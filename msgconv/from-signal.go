@@ -34,7 +34,6 @@ import (
 
 	"github.com/element-hq/mautrix-go/crypto/attachment"
 	"github.com/element-hq/mautrix-go/event"
-	"github.com/element-hq/mautrix-go/id"
 
 	"github.com/element-hq/mautrix-signal/msgconv/signalfmt"
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
@@ -140,11 +139,7 @@ func (mc *MessageConverter) ToMatrix(ctx context.Context, dm *signalpb.DataMessa
 			},
 		})
 	}
-	var replyTo id.EventID
-	var sender id.UserID
-	if dm.Quote != nil {
-		replyTo, sender = mc.GetMatrixReply(ctx, dm.Quote)
-	}
+	replyTo, sender := mc.GetMatrixReply(ctx, dm.Quote)
 	for _, part := range cm.Parts {
 		if part.Content.Mentions == nil {
 			part.Content.Mentions = &event.Mentions{}
