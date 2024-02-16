@@ -1,8 +1,11 @@
 ## Element fork
 
 The Element fork includes the following changes:
-- User activity tracking
-- Add additional metrics to the bridge
+- [User activity tracking & add additional metrics to the bridge](https://github.com/element-hq/mautrix-signal/pull/21)
+- [Use Element fork of mautrix-go](https://github.com/element-hq/mautrix-signal/pull/22)
+- [Add config to disallow manual double puppeting](https://github.com/mautrix/signal/pull/437)
+- [Don't no-op logouts](https://github.com/mautrix/signal/pull/439)
+- [Use latest profile info](https://github.com/mautrix/signal/pull/449)
 
 Some changes that appear here may get upstreamed to https://github.com/mautrix/signal, and will be removed from
 the list when they appear in both versions.
