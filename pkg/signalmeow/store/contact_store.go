@@ -31,6 +31,7 @@ import (
 type ContactStore interface {
 	LoadContact(ctx context.Context, theirUUID uuid.UUID) (*types.Contact, error)
 	LoadContactByE164(ctx context.Context, e164 string) (*types.Contact, error)
+	LoadContactWithLatestOtherProfile(ctx context.Context, contact *types.Contact) (*types.Contact, error)
 	StoreContact(ctx context.Context, contact types.Contact) error
 	AllContacts(ctx context.Context) ([]*types.Contact, error)
 	UpdatePhone(ctx context.Context, theirUUID uuid.UUID, newE164 string) error
@@ -50,13 +51,20 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash
+			profile_avatar_hash,
+			profile_fetch_ts
 		FROM signalmeow_contacts
 	`
 	getAllContactsOfUserQuery = getAllContactsQuery + `WHERE our_aci_uuid = $1`
 	getContactByUUIDQuery     = getAllContactsQuery + `WHERE our_aci_uuid = $1 AND aci_uuid = $2`
 	getContactByPhoneQuery    = getAllContactsQuery + `WHERE our_aci_uuid = $1 AND e164_number = $2`
-	upsertContactQuery        = `
+
+	getContactWithLatestOtherProfileQuery = getAllContactsQuery + `
+		WHERE our_aci_uuid <> $1 AND aci_uuid = $2 AND LENGTH(COALESCE(profile_key, '')) > 0
+		ORDER BY profile_fetch_ts DESC LIMIT 1
+	`
+
+	upsertContactQuery = `
 		INSERT INTO signalmeow_contacts (
 			our_aci_uuid,
 			aci_uuid,
@@ -68,9 +76,10 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash
+			profile_avatar_hash,
+			profile_fetch_ts
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (our_aci_uuid, aci_uuid) DO UPDATE SET
 			e164_number = excluded.e164_number,
 			contact_name = excluded.contact_name,
@@ -80,7 +89,8 @@ const (
 			profile_about = excluded.profile_about,
 			profile_about_emoji = excluded.profile_about_emoji,
 			profile_avatar_path = excluded.profile_avatar_path,
-			profile_avatar_hash = excluded.profile_avatar_hash
+			profile_avatar_hash = excluded.profile_avatar_hash,
+			profile_fetch_ts = excluded.profile_fetch_ts
 	`
 	upsertContactPhoneQuery = `
 		INSERT INTO signalmeow_contacts (
@@ -94,9 +104,10 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash
+			profile_avatar_hash,
+			profile_fetch_ts
 		)
-		VALUES ($1, $2, $3, '', '', NULL, '', '', '', '', '')
+		VALUES ($1, $2, $3, '', '', NULL, '', '', '', '', '', 0)
 		ON CONFLICT (our_aci_uuid, aci_uuid) DO UPDATE
 			SET e164_number = excluded.e164_number
 	`
@@ -116,6 +127,7 @@ func scanContact(row dbutil.Scannable) (*types.Contact, error) {
 		&contact.ProfileAboutEmoji,
 		&contact.ProfileAvatarPath,
 		&contact.ProfileAvatarHash,
+		&contact.ProfileFetchTs,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -135,6 +147,10 @@ func (s *SQLStore) LoadContact(ctx context.Context, theirUUID uuid.UUID) (*types
 
 func (s *SQLStore) LoadContactByE164(ctx context.Context, e164 string) (*types.Contact, error) {
 	return scanContact(s.db.QueryRow(ctx, getContactByPhoneQuery, s.ACI, e164))
+}
+
+func (s *SQLStore) LoadContactWithLatestOtherProfile(ctx context.Context, contact *types.Contact) (*types.Contact, error) {
+	return scanContact(s.db.QueryRow(ctx, getContactWithLatestOtherProfileQuery, s.ACI, contact.UUID))
 }
 
 func (s *SQLStore) AllContacts(ctx context.Context) ([]*types.Contact, error) {
@@ -160,6 +176,7 @@ func (s *SQLStore) StoreContact(ctx context.Context, contact types.Contact) erro
 		contact.ProfileAboutEmoji,
 		contact.ProfileAvatarPath,
 		contact.ProfileAvatarHash,
+		contact.ProfileFetchTs,
 	)
 	return err
 }
