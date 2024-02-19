@@ -341,6 +341,11 @@ func (puppet *Puppet) updateAvatar(ctx context.Context, source *User, info *type
 			return true
 		}
 		var err error
+		if info.ProfileKey != nil {
+			log.Err(err).
+				Msg("Failed to download new user avatar, no profile key for contact")
+			return true
+		}
 		avatarData, err = source.Client.DownloadUserAvatar(ctx, info.ProfileAvatarPath, info.ProfileKey)
 		if err != nil {
 			log.Err(err).
