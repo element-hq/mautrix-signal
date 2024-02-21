@@ -246,10 +246,22 @@ func (puppet *Puppet) UpdateInfo(ctx context.Context, source *User) {
 	ctx = log.WithContext(ctx)
 	var err error
 	log.Debug().Msg("Fetching contact info to update puppet")
-	info, err := source.Client.ContactByID(ctx, puppet.SignalID)
+	info, sourceUUID, err := source.Client.ContactByID(ctx, puppet.SignalID)
 	if err != nil {
 		log.Err(err).Msg("Failed to fetch contact info")
 		return
+	}
+	if sourceUUID != uuid.Nil {
+		source = puppet.bridge.GetUserBySignalID(sourceUUID)
+		if source == nil || source.Client == nil {
+			log.Warn().
+				Stringer("source_uuid", sourceUUID).
+				Msg("No fallback user for profile info update")
+			return
+		}
+		log.Debug().
+			Stringer("source_mxid", source.MXID).
+			Msg("Using fallback user for profile info update")
 	}
 
 	log.Trace().Msg("Updating puppet info")
@@ -320,13 +332,13 @@ func (puppet *Puppet) updateAvatar(ctx context.Context, source *User, info *type
 			// TODO what to do? 🤔
 			return false
 		}
-		puppet.AvatarSet = false
 		puppet.AvatarPath = ""
+		puppet.AvatarHash = info.ContactAvatar.Hash
 	} else {
-		if puppet.AvatarPath == info.ProfileAvatarPath && puppet.AvatarSet {
+		if puppet.AvatarPath == info.Profile.AvatarPath && puppet.AvatarSet {
 			return false
 		}
-		if info.ProfileAvatarPath == "" {
+		if info.Profile.AvatarPath == "" {
 			puppet.AvatarURL = id.ContentURI{}
 			puppet.AvatarPath = ""
 			puppet.AvatarHash = ""
@@ -341,27 +353,33 @@ func (puppet *Puppet) updateAvatar(ctx context.Context, source *User, info *type
 			return true
 		}
 		var err error
-		avatarData, err = source.Client.DownloadUserAvatar(ctx, info.ProfileAvatarPath, info.ProfileKey)
+		avatarData, err = source.Client.DownloadUserAvatar(ctx, info.Profile.AvatarPath, info.Profile.Key)
 		if err != nil {
 			log.Err(err).
-				Str("profile_avatar_path", info.ProfileAvatarPath).
+				Str("profile_avatar_path", info.Profile.AvatarPath).
 				Msg("Failed to download new user avatar")
 			return true
 		}
 		avatarContentType = http.DetectContentType(avatarData)
+		puppet.AvatarPath = info.Profile.AvatarPath
+		hash := sha256.Sum256(avatarData)
+		newHash := hex.EncodeToString(hash[:])
+		if puppet.AvatarHash == newHash && puppet.AvatarSet {
+			log.Debug().
+				Str("avatar_hash", newHash).
+				Str("new_avatar_path", puppet.AvatarPath).
+				Msg("Avatar path changed, but hash didn't")
+			// Path changed, but actual avatar didn't
+			return true
+		}
+		puppet.AvatarHash = newHash
+		info.ProfileAvatarHash = newHash
+		source.Client.Store.ContactStore.StoreContact(ctx, *info)
+		err = source.Client.Store.ContactStore.StoreContact(ctx, *info)
+		if err != nil {
+			log.Warn().Err(err).Msg("error updating contact's profile avatar hash")
+		}
 	}
-	hash := sha256.Sum256(avatarData)
-	newHash := hex.EncodeToString(hash[:])
-	if puppet.AvatarHash == newHash && puppet.AvatarSet {
-		log.Debug().
-			Str("avatar_hash", newHash).
-			Str("new_avatar_path", puppet.AvatarPath).
-			Msg("Avatar path changed, but hash didn't")
-		// Path changed, but actual avatar didn't
-		return true
-	}
-	puppet.AvatarPath = info.ProfileAvatarPath
-	puppet.AvatarHash = newHash
 	puppet.AvatarSet = false
 	puppet.AvatarURL = id.ContentURI{}
 	resp, err := puppet.DefaultIntent().UploadBytes(ctx, avatarData, avatarContentType)
@@ -378,7 +396,7 @@ func (puppet *Puppet) updateAvatar(ctx context.Context, source *User, info *type
 		return true
 	}
 	log.Debug().
-		Str("avatar_hash", newHash).
+		Str("avatar_hash", puppet.AvatarHash).
 		Stringer("avatar_mxc", resp.ContentURI).
 		Msg("Avatar updated successfully")
 	puppet.AvatarSet = true
