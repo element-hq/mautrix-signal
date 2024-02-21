@@ -267,6 +267,12 @@ func (cli *Client) DownloadUserAvatar(ctx context.Context, avatarPath string, pr
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
+	if encryptedAvatar == nil {
+		return nil, fmt.Errorf("failed to read response body: encryptedAvatar was nil")
+	}
+	if profileKey == nil {
+		return nil, fmt.Errorf("failed to read response body: profileKey was nil")
+	}
 	avatar, err := decryptBytes(profileKey[:], encryptedAvatar)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt response: %w", err)
