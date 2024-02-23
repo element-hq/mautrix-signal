@@ -51,7 +51,6 @@ type MetricsHandler struct {
 	puppetCount             prometheus.Gauge
 	activePuppetCount       prometheus.Gauge
 	bridgeBlocked           prometheus.Gauge
-	requestCount            *prometheus.CounterVec
 	userCount               prometheus.Gauge
 	messageCount            prometheus.Gauge
 	portalCount             *prometheus.GaugeVec
@@ -109,10 +108,6 @@ func NewMetricsHandler(address string, log zerolog.Logger, db *database.Database
 			Name: "bridge_blocked",
 			Help: "Is the bridge currently blocking messages",
 		}),
-		requestCount: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "bridge_signal_request",
-			Help: "The results of signal request processing",
-		}, []string{"result", "type"}),
 		userCount: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "signal_users_total",
 			Help: "Number of Matrix users using the bridge",
@@ -202,19 +197,6 @@ func (mh *MetricsHandler) TrackConnectionState(signalID uuid.UUID, connected boo
 			mh.connected.Dec()
 		}
 	}
-}
-
-func (mh *MetricsHandler) TrackRequest(counterType string, success bool) {
-	var result string
-	if success {
-		result = "success"
-	} else {
-		result = "error"
-	}
-	mh.requestCount.With(prometheus.Labels{
-		"type":   counterType,
-		"result": result,
-	}).Inc()
 }
 
 func (mh *MetricsHandler) updateStats() {
