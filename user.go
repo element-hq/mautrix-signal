@@ -424,6 +424,8 @@ func (user *User) startupTryConnect(retryCount int) {
 			case signalmeow.SignalConnectionEventConnected:
 				user.log.Debug().Msg("Sending Connected BridgeState")
 				user.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+				user.bridge.Metrics.TrackConnectionState(user.SignalID, true)
+				user.bridge.Metrics.TrackLoginState(user.SignalID, true)
 
 			case signalmeow.SignalConnectionEventDisconnected:
 				user.log.Debug().Msg("Received SignalConnectionEventDisconnected")
@@ -473,6 +475,7 @@ func (user *User) startupTryConnect(retryCount int) {
 						} else {
 							user.BridgeState.Send(status.BridgeState{StateEvent: status.StateTransientDisconnect, Error: "unknown-websocket-error", Message: err.Error()})
 						}
+						user.bridge.Metrics.TrackConnectionState(user.SignalID, false)
 					}
 				}
 
@@ -483,6 +486,7 @@ func (user *User) startupTryConnect(retryCount int) {
 				} else {
 					user.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Message: err.Error()})
 				}
+				user.bridge.Metrics.TrackConnectionState(user.SignalID, false)
 				err = user.Logout(ctx)
 				if err != nil {
 					user.log.Err(err).Msg("Error logging out user in response to remote logout")
@@ -497,6 +501,7 @@ func (user *User) startupTryConnect(retryCount int) {
 			case signalmeow.SignalConnectionEventError:
 				user.log.Debug().Msg("Sending UnknownError BridgeState")
 				user.BridgeState.Send(status.BridgeState{StateEvent: status.StateUnknownError, Error: "unknown-websocket-error", Message: err.Error()})
+				user.bridge.Metrics.TrackConnectionState(user.SignalID, false)
 
 			case signalmeow.SignalConnectionCleanShutdown:
 				if user.Client == nil {
@@ -507,6 +512,7 @@ func (user *User) startupTryConnect(retryCount int) {
 					user.log.Debug().Msg("Clean Shutdown, but logged out - Sending BadCredentials BridgeState")
 					user.BridgeState.Send(status.BridgeState{StateEvent: status.StateBadCredentials, Message: "You have been logged out of Signal, please reconnect"})
 				}
+				user.bridge.Metrics.TrackConnectionState(user.SignalID, false)
 			}
 		}
 	}()
@@ -865,6 +871,7 @@ func (user *User) handleLoggedOut(ctx context.Context) {
 }
 
 func (user *User) handleLoggedOutNoLock(ctx context.Context) {
+	user.bridge.Metrics.TrackLoginState(user.SignalID, false)
 	id := user.SignalID
 	user.SignalID = uuid.Nil
 	user.SignalUsername = ""
