@@ -246,27 +246,26 @@ func (puppet *Puppet) UpdateInfo(ctx context.Context, source *User) {
 	ctx = log.WithContext(ctx)
 	var err error
 	log.Debug().Msg("Fetching contact info to update puppet")
-	info, sourceUUID, err := source.Client.ContactByID(ctx, puppet.SignalID)
+	info, err := source.Client.ContactByID(ctx, puppet.SignalID)
 	if err != nil {
 		log.Err(err).Msg("Failed to fetch contact info")
 		return
 	}
-	if sourceUUID != uuid.Nil {
-		source = puppet.bridge.GetUserBySignalID(sourceUUID)
-		if source == nil || source.Client == nil {
-			log.Warn().
-				Stringer("source_uuid", sourceUUID).
-				Msg("No fallback user for profile info update")
-			return
-		}
+	if !puppet.bridge.Config.Bridge.UseOutdatedProfiles && puppet.ProfileFetchedAt.After(info.Profile.FetchedAt) {
 		log.Debug().
-			Stringer("source_mxid", source.MXID).
-			Msg("Using fallback user for profile info update")
+			Time("contact_profile_fetched_at", info.Profile.FetchedAt).
+			Time("puppet_profile_fetched_at", puppet.ProfileFetchedAt).
+			Msg("Ignoring outdated contact info")
+		return
 	}
 
 	log.Trace().Msg("Updating puppet info")
 
 	update := false
+	if puppet.ProfileFetchedAt.IsZero() && !info.Profile.FetchedAt.IsZero() {
+		update = true
+	}
+	puppet.ProfileFetchedAt = info.Profile.FetchedAt
 	if info.E164 != "" && puppet.Number != info.E164 {
 		puppet.Number = info.E164
 		update = true
@@ -373,7 +372,6 @@ func (puppet *Puppet) updateAvatar(ctx context.Context, source *User, info *type
 			return true
 		}
 		puppet.AvatarHash = newHash
-		info.ProfileAvatarHash = newHash
 		source.Client.Store.ContactStore.StoreContact(ctx, *info)
 		err = source.Client.Store.ContactStore.StoreContact(ctx, *info)
 		if err != nil {

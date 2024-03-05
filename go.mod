@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/beeper/libserv v0.0.0-20231231202820-c7303abfc32c
-	github.com/element-hq/mautrix-go v0.18.0-beta.1-mod-1
+	github.com/element-hq/mautrix-go v0.18.0-beta.1-mod-2.0.20240305190819-c6ec91b05c3c
 	github.com/emersion/go-vcard v0.0.0-20230815062825-8fda7d206ec9
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.0
@@ -16,7 +16,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/gjson v1.17.1
-	go.mau.fi/util v0.4.0
+	go.mau.fi/util v0.4.1-0.20240222202553-953608f657a3
 	golang.org/x/crypto v0.19.0
 	golang.org/x/exp v0.0.0-20240213143201-ec583247a57a
 	golang.org/x/net v0.21.0
