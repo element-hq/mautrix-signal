@@ -93,7 +93,6 @@ func (cli *Client) StartReceiveLoops(ctx context.Context) (chan SignalConnection
 		defer close(statusChan)
 		defer cancel()
 		var currentStatus, lastAuthStatus, lastUnauthStatus web.SignalWebsocketConnectionStatus
-		var lastSentStatus SignalConnectionStatus
 		for {
 			select {
 			case <-ctx.Done():
@@ -172,10 +171,10 @@ func (cli *Client) StartReceiveLoops(ctx context.Context) (chan SignalConnection
 					Event: SignalConnectionCleanShutdown,
 				}
 			}
-			if statusToSend.Event != 0 && statusToSend.Event != lastSentStatus.Event {
+			if statusToSend.Event != 0 && statusToSend.Event != cli.lastConnectionStatus.Event {
 				log.Info().Any("status_to_send", statusToSend).Msg("Sending connection status")
 				statusChan <- statusToSend
-				lastSentStatus = statusToSend
+				cli.lastConnectionStatus = statusToSend
 			}
 		}
 	}()
@@ -220,6 +219,10 @@ func (cli *Client) StopReceiveLoops() error {
 	return nil
 }
 
+func (cli *Client) LastConnectionStatus() SignalConnectionStatus {
+	return cli.lastConnectionStatus
+}
+
 func (cli *Client) ClearKeysAndDisconnect(ctx context.Context) error {
 	// Essentially logout, clearing sessions and keys, and disconnecting websockets
 	// but don't clear ACI UUID or profile keys or contacts, or anything else that
@@ -244,8 +247,10 @@ func (cli *Client) checkDecryptionErrorAndDisconnect(ctx context.Context, err er
 		return
 	}
 	log := zerolog.Ctx(ctx).With().Str("action", "check decryption error and disconnect").Logger()
-	if strings.Contains(err.Error(), "30: invalid PreKey message: decryption failed") ||
-		strings.Contains(err.Error(), "70: invalid signed prekey identifier") {
+	if strings.Contains(err.Error(), "70: invalid signed prekey identifier") {
+		log.Warn().Msg("Failed decrypting a SignedPreKey message, invalid signed prekey identifier")
+	}
+	if strings.Contains(err.Error(), "30: invalid PreKey message: decryption failed") {
 		log.Warn().Msg("Failed decrypting a PreKey message, probably our prekeys are broken, force re-registration")
 		disconnectErr := cli.ClearKeysAndDisconnect(ctx)
 		if disconnectErr != nil {
