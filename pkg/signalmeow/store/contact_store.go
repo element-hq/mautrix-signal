@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"go.mau.fi/util/dbutil"
@@ -31,7 +32,6 @@ import (
 type ContactStore interface {
 	LoadContact(ctx context.Context, theirUUID uuid.UUID) (*types.Contact, error)
 	LoadContactByE164(ctx context.Context, e164 string) (*types.Contact, error)
-	UpdateContactWithLatestProfile(ctx context.Context, contact *types.Contact) (sourceUUID uuid.UUID, err error)
 	StoreContact(ctx context.Context, contact types.Contact) error
 	AllContacts(ctx context.Context) ([]*types.Contact, error)
 	UpdatePhone(ctx context.Context, theirUUID uuid.UUID, newE164 string) error
@@ -51,8 +51,7 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash,
-			profile_fetch_ts
+			profile_fetched_at
 		FROM signalmeow_contacts
 	`
 	getAllContactsOfUserQuery = getAllContactsQuery + `WHERE our_aci_uuid = $1`
@@ -70,10 +69,9 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash,
-			profile_fetch_ts
+			profile_fetched_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		ON CONFLICT (our_aci_uuid, aci_uuid) DO UPDATE SET
 			e164_number = excluded.e164_number,
 			contact_name = excluded.contact_name,
@@ -83,8 +81,7 @@ const (
 			profile_about = excluded.profile_about,
 			profile_about_emoji = excluded.profile_about_emoji,
 			profile_avatar_path = excluded.profile_avatar_path,
-			profile_avatar_hash = excluded.profile_avatar_hash,
-			profile_fetch_ts = excluded.profile_fetch_ts
+			profile_fetched_at = excluded.profile_fetched_at
 	`
 	upsertContactPhoneQuery = `
 		INSERT INTO signalmeow_contacts (
@@ -98,10 +95,9 @@ const (
 			profile_about,
 			profile_about_emoji,
 			profile_avatar_path,
-			profile_avatar_hash,
-			profile_fetch_ts
+			profile_fetched_at
 		)
-		VALUES ($1, $2, $3, '', '', NULL, '', '', '', '', '', 0)
+		VALUES ($1, $2, $3, '', '', NULL, '', '', '', '', NULL)
 		ON CONFLICT (our_aci_uuid, aci_uuid) DO UPDATE
 			SET e164_number = excluded.e164_number
 	`
@@ -110,6 +106,7 @@ const (
 func scanContact(row dbutil.Scannable) (*types.Contact, error) {
 	var contact types.Contact
 	var profileKey []byte
+	var profileFetchedAt sql.NullInt64
 	err := row.Scan(
 		&contact.UUID,
 		&contact.E164,
@@ -120,17 +117,18 @@ func scanContact(row dbutil.Scannable) (*types.Contact, error) {
 		&contact.Profile.About,
 		&contact.Profile.AboutEmoji,
 		&contact.Profile.AvatarPath,
-		&contact.ProfileAvatarHash,
-		&contact.ProfileFetchTs,
+		&profileFetchedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
+	if profileFetchedAt.Valid {
+		contact.Profile.FetchedAt = time.UnixMilli(profileFetchedAt.Int64)
+	}
 	if len(profileKey) != 0 {
-		profileKeyConverted := libsignalgo.ProfileKey(profileKey)
-		contact.Profile.Key = &profileKeyConverted
+		contact.Profile.Key = libsignalgo.ProfileKey(profileKey)
 	}
 	return &contact, err
 }
@@ -143,42 +141,6 @@ func (s *SQLStore) LoadContactByE164(ctx context.Context, e164 string) (*types.C
 	return scanContact(s.db.QueryRow(ctx, getContactByPhoneQuery, s.ACI, e164))
 }
 
-func (s *SQLStore) UpdateContactWithLatestProfile(ctx context.Context, contact *types.Contact) (sourceUUID uuid.UUID, err error) {
-	var profileKey []byte
-	err = s.db.QueryRow(
-		ctx,
-		`SELECT
-			profile_key,
-			profile_name,
-			profile_about,
-			profile_about_emoji,
-			profile_avatar_path,
-			our_aci_uuid
-		FROM signalmeow_contacts
-		WHERE
-			our_aci_uuid <> $1 AND
-			aci_uuid = $2 AND
-			LENGTH(COALESCE(profile_key, '')) > 0
-		ORDER BY profile_fetch_ts DESC LIMIT 1`,
-		s.ACI,
-		contact.UUID,
-	).Scan(
-		&profileKey,
-		&contact.Profile.Name,
-		&contact.Profile.About,
-		&contact.Profile.AboutEmoji,
-		&contact.Profile.AvatarPath,
-		&sourceUUID,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = nil
-	} else if err == nil {
-		profileKeyConverted := libsignalgo.ProfileKey(profileKey)
-		contact.Profile.Key = &profileKeyConverted
-	}
-	return
-}
-
 func (s *SQLStore) AllContacts(ctx context.Context) ([]*types.Contact, error) {
 	rows, err := s.db.Query(ctx, getAllContactsOfUserQuery, s.ACI)
 	if err != nil {
@@ -188,6 +150,10 @@ func (s *SQLStore) AllContacts(ctx context.Context) ([]*types.Contact, error) {
 }
 
 func (s *SQLStore) StoreContact(ctx context.Context, contact types.Contact) error {
+	var profileKey []byte
+	if contact.Profile.Key.IsEmpty() {
+		profileKey = contact.Profile.Key[:]
+	}
 	_, err := s.db.Exec(
 		ctx,
 		upsertContactQuery,
@@ -196,13 +162,12 @@ func (s *SQLStore) StoreContact(ctx context.Context, contact types.Contact) erro
 		contact.E164,
 		contact.ContactName,
 		contact.ContactAvatar.Hash,
-		contact.Profile.Key.Slice(),
+		profileKey,
 		contact.Profile.Name,
 		contact.Profile.About,
 		contact.Profile.AboutEmoji,
 		contact.Profile.AvatarPath,
-		contact.ProfileAvatarHash,
-		contact.ProfileFetchTs,
+		dbutil.UnixMilliPtr(contact.Profile.FetchedAt),
 	)
 	return err
 }
