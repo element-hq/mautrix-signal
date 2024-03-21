@@ -128,7 +128,7 @@ func (br *SignalBridge) Init() {
 	br.MatrixHandler.TrackEventDuration = br.Metrics.TrackMatrixEvent
 
 	signalFormatParams = &signalfmt.FormatParams{
-		GetUserInfo: func(u uuid.UUID) signalfmt.UserInfo {
+		GetUserInfo: func(ctx context.Context, u uuid.UUID) signalfmt.UserInfo {
 			puppet := br.GetPuppetBySignalID(u)
 			if puppet == nil {
 				return signalfmt.UserInfo{}
@@ -147,7 +147,7 @@ func (br *SignalBridge) Init() {
 		},
 	}
 	matrixFormatParams = &matrixfmt.HTMLParser{
-		GetUUIDFromMXID: func(userID id.UserID) uuid.UUID {
+		GetUUIDFromMXID: func(ctx context.Context, userID id.UserID) uuid.UUID {
 			parsed, ok := br.ParsePuppetMXID(userID)
 			if ok {
 				return parsed
@@ -476,7 +476,7 @@ func main() {
 		Name:              "mautrix-signal",
 		URL:               "https://github.com/element-hq/mautrix-signal",
 		Description:       "A Matrix-Signal puppeting bridge.",
-		Version:           "0.5.0-mod-2",
+		Version:           "0.5.1-mod-1",
 		ProtocolName:      "Signal",
 		BeeperServiceName: "signal",
 		BeeperNetworkName: "signal",
