@@ -13,6 +13,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/element-hq/mautrix-go v0.18.0-mod-1 h1:1r781J054eiVNlmt3iQnGnpCMfAX0SQTqDfM1b+n+yw=
 github.com/element-hq/mautrix-go v0.18.0-mod-1/go.mod h1:8psd9ZH1FYYdgPO3L2pmk/7jdhi0BX3gdrn+qAqfyw4=
+github.com/element-hq/mautrix-go v0.18.0-mod-2 h1:hneKc3kugc9ueGO22j8WCB8vTnvUzFLUsjQRllGnfqY=
+github.com/element-hq/mautrix-go v0.18.0-mod-2/go.mod h1:oqVA5f8JTPttgKxIAp1/v4uvuCQljE7EELf50YksMjs=
 github.com/emersion/go-vcard v0.0.0-20230815062825-8fda7d206ec9 h1:ATgqloALX6cHCranzkLb8/zjivwQ9DWWDCQRnxTPfaA=
 github.com/emersion/go-vcard v0.0.0-20230815062825-8fda7d206ec9/go.mod h1:HMJKR5wlh/ziNp+sHEDV2ltblO4JD2+IdDOWtGcQBTM=
 github.com/godbus/dbus/v5 v5.0.4/go.mod h1:xhWf0FNVPg57R7Z0UbKHbJfkEywrmjJnf7w5xrFpKfA=
