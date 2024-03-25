@@ -20,7 +20,7 @@ require (
 	golang.org/x/crypto v0.21.0
 	golang.org/x/exp v0.0.0-20240314144324-c7f7c6466f7f
 	golang.org/x/net v0.22.0
-	google.golang.org/protobuf v1.32.0
+	google.golang.org/protobuf v1.33.0
 	nhooyr.io/websocket v1.8.10
 )
 
@@ -47,5 +47,4 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	maunium.net/go/mauflag v1.0.0 // indirect
-	maunium.net/go/maulogger/v2 v2.4.1 // indirect
 )
