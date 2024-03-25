@@ -18,6 +18,7 @@ package matrixfmt
 
 import (
 	"context"
+
 	"github.com/element-hq/mautrix-go/event"
 
 	signalpb "github.com/element-hq/mautrix-signal/pkg/signalmeow/protobuf"
