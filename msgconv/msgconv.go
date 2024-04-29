@@ -19,8 +19,6 @@ package msgconv
 import (
 	"context"
 
-	"github.com/google/uuid"
-
 	"github.com/element-hq/mautrix-go/event"
 	"github.com/element-hq/mautrix-go/id"
 
@@ -59,5 +57,5 @@ type MessageConverter struct {
 }
 
 func (mc *MessageConverter) IsPrivateChat(ctx context.Context) bool {
-	return mc.GetData(ctx).UserID() != uuid.Nil
+	return !mc.GetData(ctx).UserID().IsEmpty()
 }

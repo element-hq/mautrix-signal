@@ -64,7 +64,7 @@ type SignalBridge struct {
 	Config    *config.Config
 	DB        *database.Database
 	Metrics   *MetricsHandler
-	MeowStore *store.StoreContainer
+	MeowStore *store.Container
 
 	provisioning *ProvisioningAPI
 
@@ -476,7 +476,7 @@ func main() {
 		Name:              "mautrix-signal",
 		URL:               "https://github.com/element-hq/mautrix-signal",
 		Description:       "A Matrix-Signal puppeting bridge.",
-		Version:           "0.5.1-mod-1",
+		Version:           "0.6.0-mod-1",
 		ProtocolName:      "Signal",
 		BeeperServiceName: "signal",
 		BeeperNetworkName: "signal",
