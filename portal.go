@@ -241,6 +241,7 @@ func (br *SignalBridge) NewPortal(dbPortal *database.Portal) *Portal {
 		MatrixFmtParams:      matrixFormatParams,
 		ConvertVoiceMessages: true,
 		MaxFileSize:          br.MediaConfig.UploadSize,
+		LocationFormat:       br.Config.Bridge.LocationFormat,
 	}
 	go portal.messageLoop()
 
