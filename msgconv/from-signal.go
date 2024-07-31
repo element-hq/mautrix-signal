@@ -175,11 +175,15 @@ func (mc *MessageConverter) ConvertDisappearingTimerChangeToMatrix(ctx context.C
 		part.Content.Body = "Disappearing messages disabled"
 	}
 	if updatePortal {
-		portal := mc.GetData(ctx)
-		portal.ExpirationTime = timer
-		err := portal.Update(ctx)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).Msg("Failed to update portal disappearing timer in database")
+		if mc.UpdateDisappearing != nil {
+			mc.UpdateDisappearing(ctx, time.Duration(timer)*time.Second)
+		} else {
+			portal := mc.GetData(ctx)
+			portal.ExpirationTime = timer
+			err := portal.Update(ctx)
+			if err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("Failed to update portal disappearing timer in database")
+			}
 		}
 	}
 	return part
@@ -453,7 +457,8 @@ func (mc *MessageConverter) reuploadAttachment(ctx context.Context, att *signalp
 		fileName += ".ogg"
 		mimeType = "audio/ogg"
 		extra["org.matrix.msc3245.voice"] = map[string]any{}
-		extra["org.matrix.msc1767.audio"] = map[string]any{}
+		// TODO include duration here (and in info) if there's some easy way to extract it with ffmpeg
+		//extra["org.matrix.msc1767.audio"] = map[string]any{"duration": ???}
 	}
 	var file *event.EncryptedFileInfo
 	uploadMime := mimeType

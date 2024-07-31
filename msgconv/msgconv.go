@@ -18,6 +18,7 @@ package msgconv
 
 import (
 	"context"
+	"time"
 
 	"github.com/element-hq/mautrix-go/event"
 	"github.com/element-hq/mautrix-go/id"
@@ -54,6 +55,7 @@ type MessageConverter struct {
 	ConvertGIFToAPNG     bool
 	MaxFileSize          int64
 	AsyncFiles           bool
+	UpdateDisappearing   func(ctx context.Context, newTimer time.Duration)
 
 	LocationFormat string
 }

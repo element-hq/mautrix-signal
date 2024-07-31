@@ -1,3 +1,24 @@
+# v0.6.3 (2024-07-16)
+
+* Updated to libsignal v0.52.0.
+* Fixed bridge losing track of user phone numbers in some cases.
+* Fixed edge cases in handling new outgoing DMs started from other devices.
+* Added `sync groups` command (thanks to [@maltee1] in [#490]).
+* Fixed typo in location bridging example config
+  (thanks to [@AndrewFerr] in [#516]).
+
+[#490]: https://github.com/mautrix/signal/pull/490
+[#516]: https://github.com/mautrix/signal/pull/516
+[@AndrewFerr]: https://github.com/mautrix/signal/pull/516
+
+# v0.6.2 (2024-06-16)
+
+* Updated to libsignal v0.51.0.
+* Fixed voice messages not being rendered correctly in Element X.
+* Fixed contact avatars not being bridged correctly even when enabled in
+  the bridge config.
+* Implemented connector for the upcoming bridgev2 architecture.
+
 # v0.6.1 (2024-05-16)
 
 * Added support for bridging location messages from Matrix to Signal
@@ -5,8 +26,11 @@
   * Note that Signal doesn't support real location messages, so they're just
     bridged as links. The link template is configurable.
 * Fixed bridging long text messages from Signal
-  (thanks to [@maltee1] in [#509]).
+  (thanks to [@maltee1] in [#506]).
 * Improved handling of ping timeouts in Signal websocket.
+
+[#504]: https://github.com/mautrix/signal/pull/504
+[#506]: https://github.com/mautrix/signal/pull/506
 
 # v0.6.0 (2024-04-16)
 

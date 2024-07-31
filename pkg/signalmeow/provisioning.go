@@ -81,7 +81,7 @@ type ProvisioningResponse struct {
 
 func PerformProvisioning(ctx context.Context, deviceStore store.DeviceStore, deviceName string) chan ProvisioningResponse {
 	log := zerolog.Ctx(ctx).With().Str("action", "perform provisioning").Logger()
-	c := make(chan ProvisioningResponse)
+	c := make(chan ProvisioningResponse, 4)
 	go func() {
 		defer close(c)
 
@@ -384,7 +384,7 @@ func confirmDevice(
 			"registrationId":    aciRegistrationID,
 			"pniRegistrationId": pniRegistrationID,
 			"capabilities": map[string]any{
-				"pni": true,
+				"deleteSync": true,
 			},
 		},
 		"aciSignedPreKey":       aciSignedPreKeyJson,

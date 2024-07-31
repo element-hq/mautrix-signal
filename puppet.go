@@ -238,7 +238,7 @@ func (puppet *Puppet) GetAvatarURL() id.ContentURI {
 	return puppet.AvatarURL
 }
 
-func (puppet *Puppet) UpdateInfo(ctx context.Context, source *User) {
+func (puppet *Puppet) UpdateInfo(ctx context.Context, source *User, contactAvatar *types.ContactAvatar) {
 	log := zerolog.Ctx(ctx).With().
 		Str("function", "Puppet.UpdateInfo").
 		Stringer("signal_user_id", puppet.SignalID).
@@ -257,6 +257,9 @@ func (puppet *Puppet) UpdateInfo(ctx context.Context, source *User) {
 			Time("puppet_profile_fetched_at", puppet.ProfileFetchedAt).
 			Msg("Ignoring outdated contact info")
 		return
+	}
+	if contactAvatar != nil {
+		info.ContactAvatar = *contactAvatar
 	}
 
 	log.Trace().Msg("Updating puppet info")

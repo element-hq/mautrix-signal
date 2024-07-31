@@ -40,6 +40,8 @@ type RecipientStore interface {
 	LoadRecipientByE164(ctx context.Context, e164 string) (*types.Recipient, error)
 	StoreRecipient(ctx context.Context, recipient *types.Recipient) error
 	UpdateRecipientE164(ctx context.Context, aci, pni uuid.UUID, e164 string) (*types.Recipient, error)
+
+	LoadAllContacts(ctx context.Context) ([]*types.Recipient, error)
 }
 
 var _ RecipientStore = (*sqlStore)(nil)
@@ -62,12 +64,13 @@ const (
 		FROM signalmeow_recipients
 		WHERE account_id = $1
 	`
-	getRecipientByACIQuery      = getAllRecipientsQuery + `AND aci_uuid = $2`
-	getRecipientByPNIQuery      = getAllRecipientsQuery + `AND pni_uuid = $2`
-	getRecipientByACIOrPNIQuery = getAllRecipientsQuery + `AND (($2<>'00000000-0000-0000-0000-000000000000' AND aci_uuid = $2) OR ($3<>'00000000-0000-0000-0000-000000000000' AND pni_uuid = $3))`
-	getRecipientByPhoneQuery    = getAllRecipientsQuery + `AND e164_number = $2`
-	deleteRecipientByPNIQuery   = `DELETE FROM signalmeow_recipients WHERE account_id = $1 AND pni_uuid = $2`
-	upsertACIRecipientQuery     = `
+	getAllRecipientsWithNameOrPhoneQuery = getAllRecipientsQuery + `AND (contact_name <> '' OR profile_name <> '' OR e164_number <> '')`
+	getRecipientByACIQuery               = getAllRecipientsQuery + `AND aci_uuid = $2`
+	getRecipientByPNIQuery               = getAllRecipientsQuery + `AND pni_uuid = $2`
+	getRecipientByACIOrPNIQuery          = getAllRecipientsQuery + `AND (($2<>'00000000-0000-0000-0000-000000000000' AND aci_uuid = $2) OR ($3<>'00000000-0000-0000-0000-000000000000' AND pni_uuid = $3))`
+	getRecipientByPhoneQuery             = getAllRecipientsQuery + `AND e164_number = $2`
+	deleteRecipientByPNIQuery            = `DELETE FROM signalmeow_recipients WHERE account_id = $1 AND pni_uuid = $2`
+	upsertACIRecipientQuery              = `
 		INSERT INTO signalmeow_recipients (
 			account_id,
 			aci_uuid,
@@ -241,6 +244,14 @@ func (s *sqlStore) LoadAndUpdateRecipient(ctx context.Context, aci, pni uuid.UUI
 			if err != nil {
 				return fmt.Errorf("failed to run updater function: %w", err)
 			}
+			// SQL only supports one ON CONFLICT clause, which means StoreRecipient will key on the ACI if it's present.
+			// If we're adding an ACI to a PNI row, just delete the PNI row first to avoid conflicts on the PNI key.
+			if outRecipient.PNI != uuid.Nil && outRecipient.ACI == uuid.Nil && aci != uuid.Nil {
+				err = s.DeleteRecipientByPNI(ctx, outRecipient.PNI)
+				if err != nil {
+					return fmt.Errorf("failed to delete old PNI row: %w", err)
+				}
+			}
 			if outRecipient.PNI == uuid.Nil && pni != uuid.Nil {
 				outRecipient.PNI = pni
 				changed = true
@@ -276,6 +287,11 @@ func (s *sqlStore) UpdateRecipientE164(ctx context.Context, aci, pni uuid.UUID, 
 }
 func (s *sqlStore) LoadRecipientByE164(ctx context.Context, e164 string) (*types.Recipient, error) {
 	return scanRecipient(s.db.QueryRow(ctx, getRecipientByPhoneQuery, s.AccountID, e164))
+}
+
+func (s *sqlStore) LoadAllContacts(ctx context.Context) ([]*types.Recipient, error) {
+	rows, err := s.db.Query(ctx, getAllRecipientsWithNameOrPhoneQuery, s.AccountID)
+	return dbutil.NewRowIterWithError(rows, scanRecipient, err).AsList()
 }
 
 func (s *sqlStore) DeleteRecipientByPNI(ctx context.Context, pni uuid.UUID) error {

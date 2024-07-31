@@ -926,7 +926,7 @@ func (portal *Portal) handleSignalDataMessage(source *User, sender *Puppet, msg 
 		Uint64("msg_ts", msg.GetTimestamp()).
 		Logger().WithContext(context.TODO())
 	// Always update sender info when we receive a message from them, there's caching inside the function
-	sender.UpdateInfo(genericCtx, source)
+	sender.UpdateInfo(genericCtx, source, nil)
 	// Handle earlier missed group changes here.
 	if msg.GetGroupV2() != nil {
 		requiredRevision := msg.GetGroupV2().GetRevision()
@@ -1052,12 +1052,15 @@ func (portal *Portal) applySignalGroupChange(ctx context.Context, source *User, 
 				}
 			}
 		} else {
-			puppet, _ = portal.sendMembershipForPuppetAndUser(ctx, sender, addMember.ACI, event.MembershipInvite, "added")
+			puppet, err = portal.sendMembershipForPuppetAndUser(ctx, sender, addMember.ACI, event.MembershipInvite, "added")
 		}
-		if puppet != nil {
-			puppet.IntentFor(portal).SendCustomMembershipEvent(ctx, portal.MXID, puppet.IntentFor(portal).UserID, event.MembershipJoin, "")
-		} else {
-			log.Warn().Stringer("signal_user_id", addMember.ACI).Msg("Couldn't get puppet for invite")
+		if err != nil {
+			log.Err(err).Stringer("signal_user_id", addMember.ACI).Msg("Couldn't get puppet for invite")
+			return
+		}
+		_, err = puppet.IntentFor(portal).SendCustomMembershipEvent(ctx, portal.MXID, puppet.IntentFor(portal).UserID, event.MembershipJoin, "")
+		if err != nil {
+			log.Err(err).Stringer("mxid", puppet.MXID).Msg("Failed to join user")
 		}
 	}
 	bannedMembers := make(map[uuid.UUID]bool)
@@ -1799,7 +1802,7 @@ func (portal *Portal) CreateMatrixRoom(ctx context.Context, user *User, groupRev
 		initialState = append(initialState, &event.Event{
 			Type: event.StateRoomAvatar,
 			Content: event.Content{Parsed: &event.RoomAvatarEventContent{
-				URL: portal.AvatarURL,
+				URL: portal.AvatarURL.CUString(),
 			}},
 		})
 	}
@@ -1834,7 +1837,7 @@ func (portal *Portal) CreateMatrixRoom(ctx context.Context, user *User, groupRev
 	if portal.IsPrivateChat() {
 		dmPuppet = portal.GetDMPuppet()
 		if dmPuppet != nil {
-			dmPuppet.UpdateInfo(ctx, user)
+			dmPuppet.UpdateInfo(ctx, user, nil)
 			portal.UpdateDMInfo(ctx, false)
 		} else {
 			portal.UpdatePNIDMInfo(ctx, user)
@@ -1934,7 +1937,7 @@ func (portal *Portal) PostReIDUpdate(ctx context.Context, user *User) {
 	if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("Failed to update ghost power level after portal re-ID")
 	}
-	portal.GetDMPuppet().UpdateInfo(ctx, user)
+	portal.GetDMPuppet().UpdateInfo(ctx, user, nil)
 	portal.UpdateDMInfo(ctx, true)
 	if !portal.Encrypted {
 		_, _ = portal.bridge.Bot.LeaveRoom(ctx, portal.MXID)
@@ -2332,7 +2335,7 @@ func (portal *Portal) SyncParticipants(ctx context.Context, source *User, info *
 			log.Warn().Stringer("signal_user_id", member.ACI).Msg("Couldn't get puppet for group member")
 			continue
 		}
-		puppet.UpdateInfo(ctx, source)
+		puppet.UpdateInfo(ctx, source, nil)
 		intent := puppet.IntentFor(portal)
 		if member.ACI != source.SignalID && portal.MXID != "" {
 			userIDs[intent.UserID] = ((int)(member.Role) >> 1) * 50
@@ -2944,17 +2947,18 @@ func (portal *Portal) HandleMatrixMeta(brSender bridge.User, evt *event.Event) {
 		portal.Topic = content.Topic
 		groupChange.ModifyDescription = &content.Topic
 	case *event.RoomAvatarEventContent:
-		if content.URL == portal.AvatarURL {
+		url := content.URL.ParseOrIgnore()
+		if url == portal.AvatarURL {
 			return
 		}
 		var data []byte
-		if !content.URL.IsEmpty() {
-			data, err = portal.MainIntent().DownloadBytes(ctx, content.URL)
+		if !url.IsEmpty() {
+			data, err = portal.MainIntent().DownloadBytes(ctx, url)
 			if err != nil {
-				log.Err(err).Stringer("Failed to download updated avatar %s", content.URL)
+				log.Err(err).Stringer("Failed to download updated avatar %s", url)
 				return
 			}
-			log.Debug().Stringers("%s set the group avatar to %s", []fmt.Stringer{sender.MXID, content.URL})
+			log.Debug().Stringers("%s set the group avatar to %s", []fmt.Stringer{sender.MXID, url})
 		} else {
 			log.Debug().Stringer("%s removed the group avatar", sender.MXID)
 		}
@@ -2967,7 +2971,7 @@ func (portal *Portal) HandleMatrixMeta(brSender bridge.User, evt *event.Event) {
 		hash := sha256.Sum256(data)
 		avatarHash = hex.EncodeToString(hash[:])
 		avatarChanged = true
-		avatarURL = content.URL
+		avatarURL = url
 	}
 	revision, err := sender.Client.UpdateGroup(ctx, groupChange, portal.GroupID())
 	if err != nil {

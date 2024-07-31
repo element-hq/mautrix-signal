@@ -28,7 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beeper/libserv/pkg/requestlog"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
@@ -37,9 +36,11 @@ import (
 	"github.com/element-hq/mautrix-go"
 	"github.com/element-hq/mautrix-go/id"
 
+	"github.com/element-hq/mautrix-signal/legacyprovision"
 	"github.com/element-hq/mautrix-signal/pkg/libsignalgo"
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow"
 	"github.com/element-hq/mautrix-signal/pkg/signalmeow/types"
+	"go.mau.fi/util/requestlog"
 )
 
 type provisioningContextKey int
@@ -88,18 +89,12 @@ func (prov *ProvisioningAPI) Init() {
 	}
 }
 
-func jsonResponse(w http.ResponseWriter, status int, response any) {
-	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(response)
-}
-
 func (prov *ProvisioningAPI) AuthMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if auth != prov.bridge.Config.Bridge.Provisioning.SharedSecret {
 			zerolog.Ctx(r.Context()).Warn().Msg("Authentication token does not match shared secret")
-			jsonResponse(w, http.StatusForbidden, &mautrix.RespError{
+			legacyprovision.JSONResponse(w, http.StatusForbidden, &mautrix.RespError{
 				Err:     "Authentication token does not match shared secret",
 				ErrCode: mautrix.MForbidden.ErrCode,
 			})
@@ -111,60 +106,7 @@ func (prov *ProvisioningAPI) AuthMiddleware(h http.Handler) http.Handler {
 	})
 }
 
-type Error struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-	ErrCode string `json:"errcode"`
-}
-
-type Response struct {
-	Success bool   `json:"success"`
-	Status  string `json:"status"`
-
-	// For response in LinkNew
-	SessionID string `json:"session_id,omitempty"`
-	URI       string `json:"uri,omitempty"`
-
-	// For response in LinkWaitForAccount
-	UUID   string `json:"uuid,omitempty"`
-	Number string `json:"number,omitempty"`
-
-	// For response in ResolveIdentifier
-	*ResolveIdentifierResponse
-}
-
-type WhoAmIResponse struct {
-	Permissions int                   `json:"permissions"`
-	MXID        string                `json:"mxid"`
-	Signal      *WhoAmIResponseSignal `json:"signal,omitempty"`
-}
-
-type WhoAmIResponseSignal struct {
-	Number string `json:"number"`
-	UUID   string `json:"uuid"`
-	Name   string `json:"name"`
-	Ok     bool   `json:"ok"`
-}
-
-type ResolveIdentifierResponse struct {
-	RoomID      id.RoomID                           `json:"room_id"`
-	ChatID      ResolveIdentifierResponseChatID     `json:"chat_id"`
-	JustCreated bool                                `json:"just_created"`
-	OtherUser   *ResolveIdentifierResponseOtherUser `json:"other_user,omitempty"`
-}
-
-type ResolveIdentifierResponseChatID struct {
-	UUID   string `json:"uuid"`
-	Number string `json:"number"`
-}
-
-type ResolveIdentifierResponseOtherUser struct {
-	MXID        string `json:"mxid"`
-	DisplayName string `json:"displayname"`
-	AvatarURL   string `json:"avatar_url"`
-}
-
-func (prov *ProvisioningAPI) resolveIdentifier(ctx context.Context, user *User, inputPhone string) (int, *ResolveIdentifierResponse, error) {
+func (prov *ProvisioningAPI) resolveIdentifier(ctx context.Context, user *User, inputPhone string) (int, *legacyprovision.ResolveIdentifierResponse, error) {
 	if user.Client == nil {
 		return http.StatusUnauthorized, nil, errors.New("not currently connected to Signal")
 	}
@@ -201,14 +143,14 @@ func (prov *ProvisioningAPI) resolveIdentifier(ctx context.Context, user *User, 
 		Msg("Found DM target user")
 
 	var targetServiceID libsignalgo.ServiceID
-	var otherUserInfo *ResolveIdentifierResponseOtherUser
+	var otherUserInfo *legacyprovision.ResolveIdentifierResponseOtherUser
 	if aci != uuid.Nil {
 		targetServiceID = libsignalgo.NewACIServiceID(aci)
 		puppet := prov.bridge.GetPuppetBySignalID(aci)
-		otherUserInfo = &ResolveIdentifierResponseOtherUser{
-			MXID:        puppet.MXID.String(),
+		otherUserInfo = &legacyprovision.ResolveIdentifierResponseOtherUser{
+			MXID:        puppet.MXID,
 			DisplayName: puppet.Name,
-			AvatarURL:   puppet.AvatarURL.String(),
+			AvatarURL:   puppet.AvatarURL,
 		}
 	} else {
 		targetServiceID = libsignalgo.NewPNIServiceID(pni)
@@ -216,9 +158,9 @@ func (prov *ProvisioningAPI) resolveIdentifier(ctx context.Context, user *User, 
 	}
 	portal := user.GetPortalByChatID(targetServiceID.String())
 
-	return http.StatusOK, &ResolveIdentifierResponse{
+	return http.StatusOK, &legacyprovision.ResolveIdentifierResponse{
 		RoomID: portal.MXID,
-		ChatID: ResolveIdentifierResponseChatID{
+		ChatID: legacyprovision.ResolveIdentifierResponseChatID{
 			UUID:   targetServiceID.String(),
 			Number: e164String,
 		},
@@ -247,14 +189,14 @@ func (prov *ProvisioningAPI) ResolveIdentifier(w http.ResponseWriter, r *http.Re
 		} else {
 			log.Err(err).Msg("error looking up contact")
 		}
-		jsonResponse(w, status, Error{
+		legacyprovision.JSONResponse(w, status, legacyprovision.Error{
 			Success: false,
 			Error:   err.Error(),
 			ErrCode: errCode,
 		})
 		return
 	}
-	jsonResponse(w, status, Response{
+	legacyprovision.JSONResponse(w, status, legacyprovision.Response{
 		Success:                   true,
 		Status:                    "ok",
 		ResolveIdentifierResponse: resp,
@@ -282,7 +224,7 @@ func (prov *ProvisioningAPI) StartPM(w http.ResponseWriter, r *http.Request) {
 		} else {
 			log.Err(err).Msg("error looking up contact")
 		}
-		jsonResponse(w, status, Error{
+		legacyprovision.JSONResponse(w, status, legacyprovision.Error{
 			Success: false,
 			Error:   err.Error(),
 			ErrCode: errCode,
@@ -294,7 +236,7 @@ func (prov *ProvisioningAPI) StartPM(w http.ResponseWriter, r *http.Request) {
 	if portal.MXID == "" {
 		if err := portal.CreateMatrixRoom(r.Context(), user, 0); err != nil {
 			log.Err(err).Msg("error looking up contact")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   "Error creating Matrix room",
 				ErrCode: "M_INTERNAL",
@@ -308,7 +250,7 @@ func (prov *ProvisioningAPI) StartPM(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 
-	jsonResponse(w, status, Response{
+	legacyprovision.JSONResponse(w, status, legacyprovision.Response{
 		Success:                   true,
 		Status:                    "ok",
 		ResolveIdentifierResponse: resp,
@@ -403,7 +345,7 @@ func (prov *ProvisioningAPI) checkSessionAndReturnHandle(ctx context.Context, w 
 	handle := prov.existingSession(user)
 	if handle == nil {
 		log.Warn().Msg("no session found")
-		jsonResponse(w, http.StatusNotFound, Error{
+		legacyprovision.JSONResponse(w, http.StatusNotFound, legacyprovision.Error{
 			Success: false,
 			Error:   "No session found",
 			ErrCode: "M_NOT_FOUND",
@@ -415,7 +357,7 @@ func (prov *ProvisioningAPI) checkSessionAndReturnHandle(ctx context.Context, w 
 			Int("handle_id", handle.id).
 			Int("current_session", currentSession).
 			Msg("session_id does not match user's session_id")
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "session_id does not match user's session_id",
 			ErrCode: "M_BAD_JSON",
@@ -433,12 +375,12 @@ func (prov *ProvisioningAPI) WhoAmI(w http.ResponseWriter, r *http.Request) {
 		Logger()
 	log.Debug().Msg("getting whoami")
 
-	data := WhoAmIResponse{
+	data := legacyprovision.WhoAmIResponse{
 		Permissions: int(user.PermissionLevel),
 		MXID:        user.MXID.String(),
 	}
 	if user.IsLoggedIn() {
-		data.Signal = &WhoAmIResponseSignal{
+		data.Signal = &legacyprovision.WhoAmIResponseSignal{
 			Number: user.SignalUsername,
 			UUID:   user.SignalID.String(),
 			Ok:     user.Client.IsConnected(),
@@ -448,7 +390,7 @@ func (prov *ProvisioningAPI) WhoAmI(w http.ResponseWriter, r *http.Request) {
 			data.Signal.Name = puppet.Name
 		}
 	}
-	jsonResponse(w, http.StatusOK, data)
+	legacyprovision.JSONResponse(w, http.StatusOK, data)
 }
 
 func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
@@ -462,7 +404,7 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 
 	handle, err := prov.loginOrSendError(ctx, w, user)
 	if err != nil {
-		jsonResponse(w, http.StatusInternalServerError, Error{
+		legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 			Success: false,
 			Error:   err.Error(),
 			ErrCode: "M_INTERNAL",
@@ -477,7 +419,7 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 	case resp := <-handle.channel:
 		if resp.Err != nil || resp.State == signalmeow.StateProvisioningError {
 			log.Err(resp.Err).Msg("Error getting provisioning URL")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   resp.Err.Error(),
 				ErrCode: "M_INTERNAL",
@@ -486,7 +428,7 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 		}
 		if resp.State != signalmeow.StateProvisioningURLReceived {
 			log.Err(resp.Err).Stringer("state", resp.State).Msg("unexpected state")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   fmt.Sprintf("Unexpected state %s", resp.State.String()),
 				ErrCode: "M_INTERNAL",
@@ -495,7 +437,7 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Debug().Str("provisioning_url", resp.ProvisioningURL).Msg("provisioning URL received")
-		jsonResponse(w, http.StatusOK, Response{
+		legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Response{
 			Success:   true,
 			Status:    "provisioning_url_received",
 			SessionID: fmt.Sprintf("%d", handle.id),
@@ -503,7 +445,7 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 		})
 	case <-time.After(30 * time.Second):
 		log.Warn().Msg("Timeout waiting for provisioning response (new)")
-		jsonResponse(w, http.StatusGatewayTimeout, Error{
+		legacyprovision.JSONResponse(w, http.StatusGatewayTimeout, legacyprovision.Error{
 			Success: false,
 			Error:   "Timeout waiting for provisioning response (new)",
 			ErrCode: "M_TIMEOUT",
@@ -511,17 +453,13 @@ func (prov *ProvisioningAPI) LinkNew(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type LinkWaitForScanRequest struct {
-	SessionID string `json:"session_id"`
-}
-
 func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(provisioningUserKey).(*User)
 
-	var body LinkWaitForScanRequest
+	var body legacyprovision.LinkWaitForScanRequest
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "Error decoding JSON body",
 			ErrCode: "M_BAD_JSON",
@@ -530,7 +468,7 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 	}
 	sessionID, err := strconv.Atoi(body.SessionID)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "Error decoding session ID in JSON body",
 			ErrCode: "M_BAD_JSON",
@@ -563,7 +501,7 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 			// If we error waiting for the scan, treat it as a normal error not 5xx
 			// so that the client will retry quietly. Also, it's really not an internal
 			// error, sitting with a WS open waiting for a scan is inherently flaky.
-			jsonResponse(w, http.StatusBadRequest, Error{
+			legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 				Success: false,
 				Error:   resp.Err.Error(),
 				ErrCode: "M_INTERNAL",
@@ -572,7 +510,7 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 		}
 		if resp.State != signalmeow.StateProvisioningDataReceived {
 			log.Err(resp.Err).Stringer("state", resp.State).Msg("unexpected state")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   fmt.Sprintf("Unexpected state %s", resp.State.String()),
 				ErrCode: "M_INTERNAL",
@@ -580,7 +518,7 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		log.Debug().Msg("provisioning data received")
-		jsonResponse(w, http.StatusOK, Response{
+		legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Response{
 			Success: true,
 			Status:  "provisioning_data_received",
 		})
@@ -593,7 +531,7 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 	case <-time.After(45 * time.Second):
 		log.Warn().Msg("Timeout waiting for provisioning response (scan)")
 		// Using 400 here to match the old bridge
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "Timeout waiting for QR code scan",
 			ErrCode: "M_BAD_REQUEST",
@@ -602,18 +540,13 @@ func (prov *ProvisioningAPI) LinkWaitForScan(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-type LinkWaitForAccountRequest struct {
-	SessionID  string `json:"session_id"`
-	DeviceName string `json:"device_name"` // TODO this seems to not be used anywhere
-}
-
 func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(provisioningUserKey).(*User)
 
-	var body LinkWaitForAccountRequest
+	var body legacyprovision.LinkWaitForAccountRequest
 	err := json.NewDecoder(r.Body).Decode(&body)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "Error decoding JSON body",
 			ErrCode: "M_BAD_JSON",
@@ -622,7 +555,7 @@ func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.R
 	}
 	sessionID, err := strconv.Atoi(body.SessionID)
 	if err != nil {
-		jsonResponse(w, http.StatusBadRequest, Error{
+		legacyprovision.JSONResponse(w, http.StatusBadRequest, legacyprovision.Error{
 			Success: false,
 			Error:   "Error decoding session ID in JSON body",
 			ErrCode: "M_BAD_JSON",
@@ -649,7 +582,7 @@ func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.R
 	case resp := <-handle.channel:
 		if resp.Err != nil || resp.State == signalmeow.StateProvisioningError {
 			log.Err(resp.Err).Msg("Error waiting for account")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   resp.Err.Error(),
 				ErrCode: "M_INTERNAL",
@@ -658,7 +591,7 @@ func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.R
 		}
 		if resp.State != signalmeow.StateProvisioningPreKeysRegistered {
 			log.Err(resp.Err).Stringer("state", resp.State).Msg("unexpected state")
-			jsonResponse(w, http.StatusInternalServerError, Error{
+			legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 				Success: false,
 				Error:   fmt.Sprintf("Unexpected state %s", resp.State.String()),
 				ErrCode: "M_INTERNAL",
@@ -667,7 +600,7 @@ func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.R
 		}
 
 		log.Debug().Msg("prekeys registered")
-		jsonResponse(w, http.StatusOK, Response{
+		legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Response{
 			Success: true,
 			Status:  "prekeys_registered",
 			UUID:    user.SignalID.String(),
@@ -679,7 +612,7 @@ func (prov *ProvisioningAPI) LinkWaitForAccount(w http.ResponseWriter, r *http.R
 		return
 	case <-time.After(30 * time.Second):
 		log.Warn().Msg("Timeout waiting for provisioning response (account)")
-		jsonResponse(w, http.StatusGatewayTimeout, Error{
+		legacyprovision.JSONResponse(w, http.StatusGatewayTimeout, legacyprovision.Error{
 			Success: false,
 			Error:   "Timeout waiting for provisioning response (account)",
 			ErrCode: "M_TIMEOUT",
@@ -740,7 +673,10 @@ func (prov *ProvisioningAPI) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, Response{
+	// For now do nothing - we need this API to return 200 to be compatible with
+	// the old Signal bridge, which needed a call to Logout before allowing LinkNew
+	// to be called, but we don't actually want to logout, we want to allow a reconnect.
+	legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Response{
 		Success: true,
 		Status:  "logged_out",
 	})
