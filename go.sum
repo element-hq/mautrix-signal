@@ -9,8 +9,6 @@ github.com/coreos/go-systemd/v22 v22.5.0/go.mod h1:Y58oyj3AT4RCenI/lSvhwexgC+NSV
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/element-hq/mautrix-go v0.18.1-mod-1 h1:sO//h6G7tg+jnKpRcEHTdsiuPzJ5J+ypO7ClvGj25HM=
-github.com/element-hq/mautrix-go v0.18.1-mod-1/go.mod h1:9n8o2YHsM8SZLvEebjtHf8bEhg0apziM7xSl0dkdODY=
 github.com/element-hq/mautrix-go v0.19.0-mod-2 h1:tJTE+gvypTp6HPWNlsRDrP49d7ECxOmvsE30TprJllE=
 github.com/element-hq/mautrix-go v0.19.0-mod-2/go.mod h1:8z5EUTDehC6zFgm/scpMOaNISdEQm7KzrvJI6wHHVC4=
 github.com/emersion/go-vcard v0.0.0-20230815062825-8fda7d206ec9 h1:ATgqloALX6cHCranzkLb8/zjivwQ9DWWDCQRnxTPfaA=

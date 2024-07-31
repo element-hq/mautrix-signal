@@ -631,7 +631,7 @@ func (prov *ProvisioningAPI) DeleteSession(w http.ResponseWriter, r *http.Reques
 	log.Debug().Msg("delete_session called")
 
 	if !user.IsLoggedIn() {
-		jsonResponse(w, http.StatusOK, Error{
+		legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Error{
 			Error:   "You're not logged in",
 			ErrCode: "not logged in",
 		})
@@ -639,7 +639,7 @@ func (prov *ProvisioningAPI) DeleteSession(w http.ResponseWriter, r *http.Reques
 	}
 
 	user.clearKeysAndDisconnect(ctx)
-	jsonResponse(w, http.StatusOK, Response{
+	legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Response{
 		Success: true,
 		Status:  "disconnected",
 	})
@@ -655,7 +655,7 @@ func (prov *ProvisioningAPI) Logout(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Msg("Logout called")
 
 	if !user.IsLoggedIn() {
-		jsonResponse(w, http.StatusOK, Error{
+		legacyprovision.JSONResponse(w, http.StatusOK, legacyprovision.Error{
 			Error:   "You're not logged in",
 			ErrCode: "not logged in",
 		})
@@ -665,7 +665,7 @@ func (prov *ProvisioningAPI) Logout(w http.ResponseWriter, r *http.Request) {
 	err := user.Logout(ctx)
 	if err != nil {
 		user.log.Warn().Err(err).Msg("Error while logging out")
-		jsonResponse(w, http.StatusInternalServerError, Error{
+		legacyprovision.JSONResponse(w, http.StatusInternalServerError, legacyprovision.Error{
 			Success: false,
 			Error:   err.Error(),
 			ErrCode: "M_INTERNAL",
