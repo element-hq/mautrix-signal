@@ -26,8 +26,8 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/rs/zerolog"
-	"maunium.net/go/mautrix"
-	"maunium.net/go/mautrix/bridgev2"
+	"github.com/element-hq/mautrix-go"
+	"github.com/element-hq/mautrix-go/bridgev2"
 
 	"go.mau.fi/mautrix-signal/legacyprovision"
 	"go.mau.fi/mautrix-signal/pkg/connector"

@@ -21,8 +21,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"maunium.net/go/mautrix/bridgev2"
-	"maunium.net/go/mautrix/bridgev2/database"
+	"github.com/element-hq/mautrix-go/bridgev2"
+	"github.com/element-hq/mautrix-go/bridgev2/database"
 
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/store"

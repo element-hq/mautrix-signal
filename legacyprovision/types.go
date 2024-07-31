@@ -20,7 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"maunium.net/go/mautrix/id"
+	"github.com/element-hq/mautrix-go/id"
 )
 
 func JSONResponse(w http.ResponseWriter, status int, response any) {

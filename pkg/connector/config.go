@@ -22,7 +22,7 @@ import (
 	"text/template"
 
 	up "go.mau.fi/util/configupgrade"
-	"maunium.net/go/mautrix/id"
+	"github.com/element-hq/mautrix-go/id"
 
 	"go.mau.fi/mautrix-signal/pkg/signalmeow/types"
 )

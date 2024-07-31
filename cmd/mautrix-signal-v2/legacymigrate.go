@@ -21,7 +21,7 @@ import (
 
 	up "go.mau.fi/util/configupgrade"
 
-	"maunium.net/go/mautrix/bridgev2/bridgeconfig"
+	"github.com/element-hq/mautrix-go/bridgev2/bridgeconfig"
 )
 
 const legacyMigrateRenameTables = `

@@ -17,7 +17,7 @@
 package connector
 
 import (
-	"maunium.net/go/mautrix/bridgev2/database"
+	"github.com/element-hq/mautrix-go/bridgev2/database"
 )
 
 func (s *SignalConnector) GetDBMetaTypes() database.MetaTypes {

@@ -27,9 +27,9 @@ import (
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/variationselector"
 	"google.golang.org/protobuf/proto"
-	"maunium.net/go/mautrix/bridgev2"
-	"maunium.net/go/mautrix/bridgev2/database"
-	"maunium.net/go/mautrix/bridgev2/networkid"
+	"github.com/element-hq/mautrix-go/bridgev2"
+	"github.com/element-hq/mautrix-go/bridgev2/database"
+	"github.com/element-hq/mautrix-go/bridgev2/networkid"
 
 	"go.mau.fi/mautrix-signal/pkg/libsignalgo"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"

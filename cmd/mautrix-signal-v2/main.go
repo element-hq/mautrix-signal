@@ -19,8 +19,8 @@ package main
 import (
 	"net/http"
 
-	"maunium.net/go/mautrix/bridgev2/bridgeconfig"
-	"maunium.net/go/mautrix/bridgev2/matrix/mxmain"
+	"github.com/element-hq/mautrix-go/bridgev2/bridgeconfig"
+	"github.com/element-hq/mautrix-go/bridgev2/matrix/mxmain"
 
 	"go.mau.fi/mautrix-signal/pkg/connector"
 	"go.mau.fi/mautrix-signal/pkg/signalmeow"
