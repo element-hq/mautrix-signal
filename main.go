@@ -476,7 +476,7 @@ func main() {
 		Name:              "mautrix-signal",
 		URL:               "https://github.com/element-hq/mautrix-signal",
 		Description:       "A Matrix-Signal puppeting bridge.",
-		Version:           "0.6.1-mod-1",
+		Version:           "0.6.1-mod-2",
 		ProtocolName:      "Signal",
 		BeeperServiceName: "signal",
 		BeeperNetworkName: "signal",
